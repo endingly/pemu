@@ -10,10 +10,15 @@ target_link_libraries(
     field PUBLIC pemu::mesh
 )
 
-# if(BUILD_TESTING)
-#     file(GLOB_RECURSE test_field_srcs test/*.cpp)
-#     add_executable(test_field ${test_field_srcs})
-#     find_package(GTest CONFIG REQUIRED)
-#     target_link_libraries(test_field PRIVATE GTest::gtest GTest::gtest_main field)
-#     gtest_discover_tests(test_field)
-# endif()
+if(BUILD_TESTING)
+    file(GLOB_RECURSE test_field_srcs test/*.cpp)
+    add_executable(test_field ${test_field_srcs})
+    find_package(GTest CONFIG REQUIRED)
+    target_link_libraries(test_field PRIVATE GTest::gtest GTest::gtest_main field)
+    target_compile_definitions(
+        test_mesh
+        PRIVATE
+        PEMU_MESH_TEST_DATA_DIR=\"${PROJECT_SOURCE_DIR}/submod/mesh/test\"
+    )
+    gtest_discover_tests(test_field)
+endif()
