@@ -1,13 +1,13 @@
-file(GLOB_RECURSE field_srcs src/*cpp)
-add_library(field ${field_srcs})
+# file(GLOB_RECURSE field_srcs src/*cpp)
+add_library(field INTERFACE)
 add_library(pemu::field ALIAS field)
-pemu_register_public_headers(
+pemu_register_interface_headers(
     field
     field
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 target_link_libraries(
-    field PUBLIC pemu::mesh
+    field INTERFACE pemu::mesh
 )
 
 if(BUILD_TESTING)
