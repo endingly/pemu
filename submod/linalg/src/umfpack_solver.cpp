@@ -1,4 +1,4 @@
-#include "umfpack_solver.hpp"
+#include <pemu/linalg/umfpack_solver.hpp>
 
 namespace pemu::linalg {
 

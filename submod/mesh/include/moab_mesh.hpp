@@ -1,6 +1,6 @@
 #pragma once
 
-#include "i_mesh.hpp"
+#include <pemu/mesh/i_mesh.hpp>
 
 #include <moab/Core.hpp>
 

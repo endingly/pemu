@@ -1,6 +1,6 @@
 // linear_solver/suitesparse/cholmod_solver.cpp
 
-#include "cholmod_solver.hpp"
+#include <pemu/linalg/cholmod_solver.hpp>
 
 namespace pemu::linalg {
 

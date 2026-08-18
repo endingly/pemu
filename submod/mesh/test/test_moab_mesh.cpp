@@ -1,12 +1,11 @@
 #include <gtest/gtest.h>
 
-#include "moab_mesh.hpp"
+#include <pemu/mesh/moab_mesh.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <limits>
-#include <span>
 
 namespace pemu::mesh::test {
 

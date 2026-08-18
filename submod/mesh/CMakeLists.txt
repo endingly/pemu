@@ -1,6 +1,11 @@
 file(GLOB_RECURSE mesh_srcs src/*.cpp)
 add_library(mesh ${mesh_srcs})
-target_include_directories(mesh PUBLIC include)
+add_library(pemu::mesh ALIAS mesh)
+pemu_register_public_headers(
+    mesh
+    mesh
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 find_package(MOAB CONFIG REQUIRED)
 target_link_libraries(mesh PUBLIC MOAB)
 

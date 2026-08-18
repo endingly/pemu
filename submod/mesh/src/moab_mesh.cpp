@@ -1,4 +1,4 @@
-#include "moab_mesh.hpp"
+#include <pemu/mesh/moab_mesh.hpp>
 
 #include <moab/Interface.hpp>
 #include <moab/Range.hpp>

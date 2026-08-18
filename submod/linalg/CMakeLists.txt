@@ -1,6 +1,12 @@
 file(GLOB_RECURSE linalg_srcs src/*cpp)
-add_library(linalg ${linalg_srcs})
-target_include_directories(linalg PUBLIC include)
+add_library(linalg)
+target_sources(linalg PRIVATE ${linalg_srcs})
+add_library(pemu::linalg ALIAS linalg)
+pemu_register_public_headers(
+    linalg
+    linalg
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(CHOLMOD CONFIG REQUIRED)
 find_package(UMFPACK CONFIG REQUIRED)

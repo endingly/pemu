@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
-#include <cholmod_solver.hpp>
-#include <types.hpp>
-#include <umfpack_solver.hpp>
+#include <pemu/linalg/cholmod_solver.hpp>
+#include <pemu/linalg/types.hpp>
+#include <pemu/linalg/umfpack_solver.hpp>
 
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
