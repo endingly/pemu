@@ -1,0 +1,97 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "ci-linux-gcc-debug",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TESTING": "ON",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            }
+        },
+        {
+            "name": "ci-linux-gcc-release",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_C_COMPILER": "/usr/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "BUILD_TESTING": "ON",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "ci-linux-gcc-debug",
+            "configurePreset": "ci-linux-gcc-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ci-linux-gcc-release",
+            "configurePreset": "ci-linux-gcc-release",
+            "configuration": "Release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "ci-linux-gcc-debug",
+            "configurePreset": "ci-linux-gcc-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ci-linux-gcc-release",
+            "configurePreset": "ci-linux-gcc-release",
+            "configuration": "Release"
+        }
+    ],
+    "workflowPresets": [
+        {
+            "name": "ci-linux-gcc-debug",
+            "displayName": "CI Debug Build + Test",
+            "description": "Configure, build Debug, run tests",
+            "steps": [
+                {
+                    "name": "ci-linux-gcc-debug",
+                    "type": "configure"
+                },
+                {
+                    "name": "ci-linux-gcc-debug",
+                    "type": "build"
+                },
+                {
+                    "name": "ci-linux-gcc-debug",
+                    "type": "test"
+                }
+            ]
+        },
+        {
+            "name": "ci-linux-gcc-release",
+            "displayName": "CI Release Build + Test",
+            "description": "Configure, build Release, run tests",
+            "steps": [
+                {
+                    "name": "ci-linux-gcc-release",
+                    "type": "configure"
+                },
+                {
+                    "name": "ci-linux-gcc-release",
+                    "type": "build"
+                },
+                {
+                    "name": "ci-linux-gcc-release",
+                    "type": "test"
+                }
+            ]
+        }
+    ]
+}

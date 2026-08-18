@@ -1,0 +1,25 @@
+CompileFlags:
+  CompilationDatabase: out/build/ci-linux-gcc-debug/
+
+  Remove:
+    - -fmodules-ts
+    - -fmodule-only
+    - -fmodule-mapper=*
+    - -fdeps-format=*
+    - -fdeps-file=*
+    - -fdeps-target=*
+
+  Add:
+    - -std=c++23
+
+Index:
+  Background: Build
+
+Diagnostics:
+  UnusedIncludes: None
+  Suppress:
+    - "module_not_found"
+    - "ast_file_version_too_old"
+
+Documentation:
+  CommentFormat: Doxygen
