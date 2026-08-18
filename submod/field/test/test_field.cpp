@@ -15,7 +15,7 @@ std::filesystem::path testMeshPath() {
 #ifdef PEMU_MESH_TEST_DATA_DIR
   return std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} / "two_quads.msh";
 #else
-  return std::filesystem::path{"submod/mesh/test/two_quads.msh"};
+  return std::filesystem::path{"two_quads.msh"};
 #endif
 }
 

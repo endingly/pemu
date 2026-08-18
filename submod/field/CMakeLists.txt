@@ -16,7 +16,7 @@ if(BUILD_TESTING)
     find_package(GTest CONFIG REQUIRED)
     target_link_libraries(test_field PRIVATE GTest::gtest GTest::gtest_main field)
     target_compile_definitions(
-        test_mesh
+        test_field
         PRIVATE
         PEMU_MESH_TEST_DATA_DIR=\"${PROJECT_SOURCE_DIR}/submod/mesh/test\"
     )

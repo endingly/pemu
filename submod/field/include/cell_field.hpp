@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pemu/mesh/i_mesh.hpp>
+#include <pemu/field/types.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -14,8 +14,8 @@ template <typename T>
 class CellField {
  public:
   using value_type = T;
-
   using size_type = std::size_t;
+  static constexpr Location location = Location::Cell;
 
  public:
   explicit CellField(const mesh::IMesh& mesh)
