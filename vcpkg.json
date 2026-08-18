@@ -7,6 +7,7 @@
     "fmt",
     "gtest",
     "suitesparse-umfpack",
-    "eigen3"
+    "eigen3",
+    "moab"
   ]
 }

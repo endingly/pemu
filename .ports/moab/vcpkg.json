@@ -1,0 +1,17 @@
+{
+    "name": "moab",
+    "version": "5.6.0",
+    "description": "The Mesh-Oriented datABase (MOAB)",
+    "homepage": "https://sigma.mcs.anl.gov/moab-library/",
+    "license": "LGPL-3.0-or-later",
+    "dependencies": [
+        {
+            "name": "vcpkg-cmake",
+            "host": true
+        },
+        {
+            "name": "vcpkg-cmake-config",
+            "host": true
+        }
+    ]
+}
