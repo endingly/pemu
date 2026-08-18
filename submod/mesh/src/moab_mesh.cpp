@@ -2,6 +2,8 @@
 
 #include <moab/Interface.hpp>
 #include <moab/Range.hpp>
+#include <moab/CN.hpp>
+#include <MBTagConventions.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -640,15 +642,160 @@ void MoabMesh::buildGeometry() {
 // ============================================================
 
 void MoabMesh::buildBoundaryMetadata() {
-  boundary_ids_.resize(face_handles_.size(), invalid_boundary);
+  //
+  // Default:
+  //
+  // internal face -> invalid_boundary
+  //
+  // boundary face with no physical tag
+  //               -> invalid_boundary
+  //
+  boundary_ids_.assign(numFaces(), invalid_boundary);
 
-  for (std::size_t f = 0; f < face_handles_.size(); ++f) {
+  // --------------------------------------------------------
+  // Gmsh physical groups are imported by MOAB as
+  // MATERIAL_SET entity sets.
+  //
+  // Example:
+  //
+  // physical id = 1 -> left
+  // physical id = 2 -> right
+  //
+  // The numeric id is stored in MATERIAL_SET.
+  // --------------------------------------------------------
 
-    const FaceId face = static_cast<FaceId>(f);
+  moab::Tag material_tag{};
 
-    if (face_neighbor_[face] == invalid_cell) {
+  const auto tag_error = core_->tag_get_handle(
+      MATERIAL_SET_TAG_NAME, 1, moab::MB_TYPE_INTEGER, material_tag);
 
-      boundary_ids_[face] = 0;
+  //
+  // No MATERIAL_SET tag simply means:
+  //
+  // mesh contains no physical groups.
+  //
+  if (tag_error == moab::MB_TAG_NOT_FOUND) {
+    return;
+  }
+
+  checkMoab(tag_error, "MOAB failed to query MATERIAL_SET tag");
+
+  // --------------------------------------------------------
+  // Find all entity sets carrying MATERIAL_SET.
+  // --------------------------------------------------------
+
+  moab::Range material_sets;
+
+  const auto set_error = core_->get_entities_by_type_and_tag(
+      0, moab::MBENTITYSET, &material_tag, nullptr, 1, material_sets);
+
+  checkMoab(set_error, "MOAB failed to query MATERIAL_SET entity sets");
+
+  // --------------------------------------------------------
+  // Iterate physical groups.
+  // --------------------------------------------------------
+
+  for (const auto set : material_sets) {
+
+    int physical_id = 0;
+
+    const auto id_error =
+        core_->tag_get_data(material_tag, &set, 1, &physical_id);
+
+    checkMoab(id_error, "MOAB failed to read MATERIAL_SET id");
+
+    //
+    // pemu BoundaryId is unsigned.
+    //
+    if (physical_id < 0) {
+      throw std::runtime_error("negative physical group id is not supported");
+    }
+
+    // ----------------------------------------------------
+    // Query entities contained in the physical group.
+    //
+    // Recursive = true is deliberate:
+    //
+    // a set may contain other sets instead of directly
+    // containing edges.
+    // ----------------------------------------------------
+
+    moab::Range entities;
+
+    const auto entity_error =
+        core_->get_entities_by_handle(set, entities, true);
+
+    checkMoab(entity_error, "MOAB failed to query MATERIAL_SET contents");
+
+    // ----------------------------------------------------
+    // Only dimension-1 entities can represent FVM
+    // boundary faces in a 2D mesh.
+    //
+    // domain physical group (dimension 2) is ignored here.
+    // ----------------------------------------------------
+
+    for (const auto entity : entities) {
+
+      const auto type = core_->type_from_handle(entity);
+
+      const int entity_dimension = moab::CN::Dimension(type);
+
+      if (entity_dimension != dimension_ - 1) {
+
+        //
+        // e.g. physical group "domain"
+        //
+        continue;
+      }
+
+      // ------------------------------------------------
+      // Map MOAB edge entity -> pemu FaceId.
+      // ------------------------------------------------
+
+      const auto face_it = face_id_.find(entity);
+
+      if (face_it == face_id_.end()) {
+
+        //
+        // This edge may not belong to the active cell
+        // topology represented by pemu.
+        //
+        continue;
+      }
+
+      const FaceId face = face_it->second;
+
+      // ------------------------------------------------
+      // Physical groups of dimension-1 are meaningful as
+      // boundary groups only if the corresponding face
+      // is actually topologically on the boundary.
+      //
+      // Do not silently accept an internal interface as
+      // external boundary.
+      // ------------------------------------------------
+
+      if (!isBoundary(face)) {
+        continue;
+      }
+
+      const BoundaryId id = static_cast<BoundaryId>(physical_id);
+
+      // ------------------------------------------------
+      // A face should normally belong to exactly one
+      // physical boundary group.
+      //
+      // Catch conflicting assignment early.
+      // ------------------------------------------------
+
+      if (boundary_ids_[face] != invalid_boundary &&
+          boundary_ids_[face] != id) {
+
+        throw std::runtime_error(
+            "boundary face belongs to multiple "
+            "physical groups");
+      }
+
+      boundary_ids_[face] = id;
     }
   }
 }

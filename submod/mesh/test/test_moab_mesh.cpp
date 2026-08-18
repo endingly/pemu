@@ -53,6 +53,26 @@ class MoabMeshTest : public ::testing::Test {
   MoabMesh mesh_;
 };
 
+FaceId findBoundaryFace(const IMesh& mesh, double x, double y) {
+  constexpr double eps = 1e-12;
+
+  for (FaceId f = 0; f < mesh.numFaces(); ++f) {
+
+    if (!mesh.isBoundary(f)) {
+      continue;
+    }
+
+    const auto c = mesh.faceCenter(f);
+
+    if (std::abs(c.x - x) < eps && std::abs(c.y - y) < eps) {
+
+      return f;
+    }
+  }
+
+  throw std::runtime_error("boundary face not found");
+}
+
 }  // namespace
 
 // ============================================================
@@ -376,31 +396,6 @@ TEST_F(MoabMeshTest, InternalFaceHasCorrectGeometry) {
 }
 
 // ============================================================
-// Boundary metadata.
-//
-// Current MoabMesh v0.1:
-//
-// boundary face -> BoundaryId = 0
-//
-// internal face -> invalid_boundary
-//
-// ============================================================
-
-TEST_F(MoabMeshTest, AssignsDefaultBoundaryId) {
-  for (FaceId f = 0; f < mesh_.numFaces(); ++f) {
-
-    if (mesh_.isBoundary(f)) {
-
-      EXPECT_EQ(mesh_.boundaryId(f), BoundaryId{0});
-
-    } else {
-
-      EXPECT_EQ(mesh_.boundaryId(f), invalid_boundary);
-    }
-  }
-}
-
-// ============================================================
 // Dense ID invariants.
 //
 // All IDs returned by topology must satisfy:
@@ -455,6 +450,83 @@ TEST_F(MoabMeshTest, RejectsInvalidCellId) {
   EXPECT_THROW(mesh_.cellCenter(invalid), std::out_of_range);
 
   EXPECT_THROW(mesh_.cellVolume(invalid), std::out_of_range);
+}
+
+TEST_F(MoabMeshTest, ReadsLeftBoundaryPhysicalGroup) {
+  const FaceId face = findBoundaryFace(mesh_, 0.0, 0.5);
+
+  ASSERT_TRUE(mesh_.isBoundary(face));
+
+  EXPECT_EQ(mesh_.boundaryId(face), BoundaryId{1});
+}
+
+TEST_F(MoabMeshTest, ReadsRightBoundaryPhysicalGroup) {
+  const FaceId face = findBoundaryFace(mesh_, 2.0, 0.5);
+
+  ASSERT_TRUE(mesh_.isBoundary(face));
+
+  EXPECT_EQ(mesh_.boundaryId(face), BoundaryId{2});
+}
+
+TEST_F(MoabMeshTest, ReadsBottomBoundaryPhysicalGroup) {
+  std::size_t count = 0;
+
+  for (FaceId f = 0; f < mesh_.numFaces(); ++f) {
+
+    if (!mesh_.isBoundary(f)) {
+      continue;
+    }
+
+    const auto center = mesh_.faceCenter(f);
+
+    if (std::abs(center.y) < kTolerance) {
+
+      EXPECT_EQ(mesh_.boundaryId(f), BoundaryId{3});
+
+      ++count;
+    }
+  }
+
+  EXPECT_EQ(count, 2u);
+}
+
+TEST_F(MoabMeshTest, ReadsTopBoundaryPhysicalGroup) {
+  std::size_t count = 0;
+
+  for (FaceId f = 0; f < mesh_.numFaces(); ++f) {
+
+    if (!mesh_.isBoundary(f)) {
+      continue;
+    }
+
+    const auto center = mesh_.faceCenter(f);
+
+    if (std::abs(center.y - 1.0) < kTolerance) {
+
+      EXPECT_EQ(mesh_.boundaryId(f), BoundaryId{4});
+
+      ++count;
+    }
+  }
+
+  EXPECT_EQ(count, 2u);
+}
+
+TEST_F(MoabMeshTest, InternalFaceHasNoBoundaryId) {
+  std::size_t count = 0;
+
+  for (FaceId f = 0; f < mesh_.numFaces(); ++f) {
+
+    if (mesh_.isBoundary(f)) {
+      continue;
+    }
+
+    EXPECT_EQ(mesh_.boundaryId(f), invalid_boundary);
+
+    ++count;
+  }
+
+  EXPECT_EQ(count, 1u);
 }
 
 }  // namespace pemu::mesh::test
