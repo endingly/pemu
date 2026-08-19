@@ -1,22 +1,19 @@
 #include <gtest/gtest.h>
-
 #include <pemu/boundary/boundary_condition_set.hpp>
-
 #include <pemu/equation/electrostatic_drift_diffusion_stepper.hpp>
-
 #include <pemu/field/cell_field.hpp>
-
 #include <pemu/linalg/cholmod_solver.hpp>
-
 #include <pemu/mesh/moab_mesh.hpp>
-
 #include <pemu/physics/charged_species_transport.hpp>
+#include <pemu/physics/ionization_reaction.hpp>
 
 #include <cmath>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <vector>
+
+namespace pemu::equation::test {
 
 namespace {
 
@@ -126,6 +123,33 @@ class ElectrostaticDriftDiffusionTest : public ::testing::Test {
  protected:
   mesh::MoabMesh mesh_;
 };
+
+class ElectrostaticDriftDiffusionReactionTest : public ::testing::Test {
+ protected:
+  ElectrostaticDriftDiffusionReactionTest() : mesh_(testMeshPath().string()) {}
+  static constexpr double kTolerance = 1e-12;
+  mesh::MoabMesh mesh_;
+};
+
+// ============================================================
+// Integral of number density:
+//
+//     N = sum_P n_P V_P
+//
+// This is not necessarily the literal integer particle count;
+// it is the finite-volume integral of number density.
+// ============================================================
+
+double totalParticles(const mesh::IMesh& mesh,
+                      const field::CellField<double>& density) {
+  double total = 0.0;
+  for (mesh::CellId cell = 0; cell < mesh.numCells(); ++cell) {
+    total += density[cell] * mesh.cellVolume(cell);
+  }
+  return total;
+}
+
+};  // namespace
 
 // ============================================================
 // 1. Uniform neutral plasma
@@ -461,4 +485,363 @@ TEST_F(ElectrostaticDriftDiffusionTest, RejectsInvalidSpeciesChargePolarity) {
       std::invalid_argument);
 }
 
-}  // namespace
+// ============================================================
+// Electron-impact ionization:
+//
+//     e + N -> 2e + N+
+//
+// Net production:
+//
+//     S_e = R
+//     S_i = R
+//
+// with:
+//
+//     R = k_ion n_e n_N
+//
+// Test configuration:
+//
+//     n_e^0 = n_i^0 = 1
+//
+//     n_N   = 4
+//     k_ion = 0.5
+//
+// therefore:
+//
+//     R = 0.5 * 1 * 4 = 2
+//
+// dt = 0.1
+//
+// therefore:
+//
+//     n_e^1 = 1 + 0.1 * 2 = 1.2
+//     n_i^1 = 1 + 0.1 * 2 = 1.2
+//
+// Because electron and ion are produced in equal numbers:
+//
+//     rho = q_e n_e + q_i n_i = 0
+//
+// both before and after the reaction step.
+// ============================================================
+
+TEST_F(ElectrostaticDriftDiffusionReactionTest,
+       IonizationProducesNeutralElectronIonPairs) {
+  // ========================================================
+  // Physical / numerical parameters
+  // ========================================================
+
+  constexpr double permittivity = 1.0;
+
+  constexpr double dt = 0.1;
+
+  constexpr double initial_density = 1.0;
+
+  constexpr double neutral_density = 4.0;
+
+  constexpr double ionization_rate_coefficient = 0.5;
+
+  // ========================================================
+  // Species densities
+  //
+  // Initially quasi-neutral:
+  //
+  //     n_e = n_i = 1
+  // ========================================================
+
+  field::CellField<double> electron_density(mesh_, initial_density);
+
+  field::CellField<double> ion_density(mesh_, initial_density);
+
+  // ========================================================
+  // Reaction rate and species sources
+  // ========================================================
+
+  field::CellField<double> reaction_rate(mesh_, 0.0);
+
+  field::CellField<double> electron_source(mesh_, 0.0);
+
+  field::CellField<double> ion_source(mesh_, 0.0);
+
+  // ========================================================
+  // Calculate:
+  //
+  //     R = k_ion n_e n_N
+  // ========================================================
+
+  physics::reaction::electronImpactIonizationRate(
+      electron_density, neutral_density, ionization_rate_coefficient,
+      reaction_rate);
+
+  // Expected rate:
+  //
+  //     0.5 * 1 * 4 = 2
+  //
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    EXPECT_NEAR(reaction_rate[cell], 2.0, kTolerance);
+  }
+
+  // ========================================================
+  // Convert reaction rate into species sources:
+  //
+  //     S_e += R
+  //     S_i += R
+  // ========================================================
+
+  electron_source.fill(0.0);
+  ion_source.fill(0.0);
+
+  physics::reaction::addPairProductionSource(reaction_rate, electron_source,
+                                             ion_source);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    EXPECT_NEAR(electron_source[cell], 2.0, kTolerance);
+
+    EXPECT_NEAR(ion_source[cell], 2.0, kTolerance);
+  }
+
+  // ========================================================
+  // Check reaction charge source before stepping:
+  //
+  //     q_e S_e + q_i S_i = 0
+  // ========================================================
+
+  constexpr double electron_charge = -1.0;
+
+  constexpr double ion_charge = +1.0;
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    const double charge_source =
+        electron_charge * electron_source[cell] + ion_charge * ion_source[cell];
+
+    EXPECT_NEAR(charge_source, 0.0, kTolerance);
+  }
+
+  // ========================================================
+  // Potential boundary conditions
+  //
+  // Homogeneous Dirichlet:
+  //
+  //     phi = 0
+  //
+  // Since plasma starts neutral:
+  //
+  //     rho = 0
+  //
+  // therefore:
+  //
+  //     phi = 0
+  //     E   = 0
+  // ========================================================
+
+  boundary::BoundaryConditionSet potential_bc;
+
+  potential_bc.setDirichlet(mesh::BoundaryId{1}, 0.0);
+
+  potential_bc.setDirichlet(mesh::BoundaryId{2}, 0.0);
+
+  potential_bc.setDirichlet(mesh::BoundaryId{3}, 0.0);
+
+  potential_bc.setDirichlet(mesh::BoundaryId{4}, 0.0);
+
+  // ========================================================
+  // Species boundary conditions
+  //
+  // At the beginning of this step:
+  //
+  //     n_e = n_i = 1
+  //
+  // Therefore setting boundary state to 1 makes transport
+  // flux zero initially.
+  //
+  // This deliberately isolates the reaction source term.
+  // ========================================================
+
+  boundary::BoundaryConditionSet electron_bc;
+
+  boundary::BoundaryConditionSet ion_bc;
+
+  for (const mesh::BoundaryId id : {mesh::BoundaryId{1}, mesh::BoundaryId{2},
+                                    mesh::BoundaryId{3}, mesh::BoundaryId{4}}) {
+
+    electron_bc.setDirichlet(id, initial_density);
+
+    ion_bc.setDirichlet(id, initial_density);
+  }
+
+  // ========================================================
+  // Species transport parameters
+  //
+  // Mobility does not matter in this particular test because
+  // E = 0.
+  //
+  // Diffusivity also produces zero flux because initial
+  // density is spatially constant.
+  // ========================================================
+
+  physics::ChargedSpeciesTransport electron{.charge = electron_charge,
+
+                                            .mobility = 1.0,
+
+                                            .diffusivity = 0.1};
+
+  physics::ChargedSpeciesTransport ion{.charge = ion_charge,
+
+                                       .mobility = 0.5,
+
+                                       .diffusivity = 0.1};
+
+  // ========================================================
+  // Construct coupled electrostatic drift-diffusion stepper
+  // ========================================================
+
+  equation::ElectrostaticDriftDiffusionStepper stepper(
+      mesh_, permittivity, dt, electron, ion, potential_bc, electron_bc, ion_bc,
+      std::make_unique<linalg::CholmodSolver>());
+
+  // ========================================================
+  // Particle inventory BEFORE timestep
+  // ========================================================
+
+  const double electron_before = totalParticles(mesh_, electron_density);
+
+  const double ion_before = totalParticles(mesh_, ion_density);
+
+  // ========================================================
+  // Integrated reaction rate:
+  //
+  //     integral R dV
+  // ========================================================
+
+  double integrated_reaction_rate = 0.0;
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    integrated_reaction_rate += reaction_rate[cell] * mesh_.cellVolume(cell);
+  }
+
+  // ========================================================
+  // Advance one coupled timestep
+  //
+  // Internally:
+  //
+  // n_e^k, n_i^k
+  //       ↓
+  //      rho^k
+  //       ↓
+  //   Poisson solve
+  //       ↓
+  //      phi^k
+  //       ↓
+  //       E^k
+  //       ↓
+  //   drift velocity
+  //       ↓
+  //      SG flux
+  //       ↓
+  // continuity + source
+  //       ↓
+  // n_e^(k+1), n_i^(k+1)
+  // ========================================================
+
+  const auto result =
+      stepper.step(electron_density, electron_source, ion_density, ion_source);
+
+  ASSERT_TRUE(result.success());
+
+  // ========================================================
+  // Local density verification
+  //
+  //     n^(k+1)
+  //
+  //       = 1 + dt * R
+  //
+  //       = 1 + 0.1 * 2
+  //
+  //       = 1.2
+  // ========================================================
+
+  constexpr double expected_density = 1.2;
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    EXPECT_NEAR(electron_density[cell], expected_density, kTolerance);
+
+    EXPECT_NEAR(ion_density[cell], expected_density, kTolerance);
+  }
+
+  // ========================================================
+  // Global particle balance
+  // ========================================================
+
+  const double electron_after = totalParticles(mesh_, electron_density);
+
+  const double ion_after = totalParticles(mesh_, ion_density);
+
+  const double expected_particle_increase = dt * integrated_reaction_rate;
+
+  EXPECT_NEAR(electron_after - electron_before, expected_particle_increase,
+              kTolerance);
+
+  EXPECT_NEAR(ion_after - ion_before, expected_particle_increase, kTolerance);
+
+  // ========================================================
+  // Electron and ion production must be identical.
+  // ========================================================
+
+  EXPECT_NEAR(electron_after - electron_before, ion_after - ion_before,
+              kTolerance);
+
+  // ========================================================
+  // IMPORTANT:
+  //
+  // step() used rho^k / phi^k / E^k to advance species.
+  //
+  // electron_density / ion_density are now k+1, but the
+  // stepper's electrostatic fields still correspond to k.
+  //
+  // Recompute electrostatics so that:
+  //
+  //     rho, phi, E
+  //
+  // correspond to the newly updated densities.
+  // ========================================================
+
+  const auto electrostatic_result =
+      stepper.updateElectrostatics(electron_density, ion_density);
+
+  ASSERT_TRUE(electrostatic_result.success());
+
+  // ========================================================
+  // Pair production must not create net charge:
+  //
+  //     rho^(k+1)
+  //
+  //       = -n_e^(k+1)
+  //         +n_i^(k+1)
+  //
+  //       = 0
+  // ========================================================
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    EXPECT_NEAR(stepper.chargeDensity()[cell], 0.0, kTolerance);
+
+    EXPECT_NEAR(stepper.potential()[cell], 0.0, kTolerance);
+  }
+
+  // ========================================================
+  // Consequently electric field and drift velocity remain
+  // zero after electrostatics is synchronized to k+1.
+  // ========================================================
+
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+    EXPECT_NEAR(stepper.electricFieldNormal()[face], 0.0, kTolerance);
+    EXPECT_NEAR(stepper.electronDriftVelocityNormal()[face], 0.0, kTolerance);
+    EXPECT_NEAR(stepper.ionDriftVelocityNormal()[face], 0.0, kTolerance);
+  }
+}
+
+}  // namespace pemu::equation::test
