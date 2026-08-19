@@ -10,9 +10,12 @@ struct Dirichlet {
 };
 
 //
-// Specifies outward flux:
+// Prescribed outward normal diffusive flux
 //
-//   -epsilon grad(phi) · n = value
+//     -k grad(u) · n = value
+//
+// where k is the diffusion/conductivity coefficient
+// of the equation using this boundary condition.
 //
 struct Neumann {
   double value;

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pemu/mesh/geometry.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
 #include <algorithm>
@@ -13,12 +14,8 @@ namespace {
 
 constexpr double kTolerance = 1e-12;
 
-double dot(const Vec3& a, const Vec3& b) {
-  return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
 double norm(const Vec3& v) {
-  return std::sqrt(dot(v, v));
+  return std::sqrt(mesh::dot(v, v));
 }
 
 bool contains(std::span<const FaceId> faces, FaceId target) {

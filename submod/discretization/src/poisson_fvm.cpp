@@ -1,6 +1,7 @@
-#include <pemu/discretization/poisson_fvm.hpp>
-
 #include <Eigen/SparseCore>
+
+#include <pemu/discretization/poisson_fvm.hpp>
+#include <pemu/mesh/geometry.hpp>
 
 #include <cmath>
 #include <concepts>
@@ -10,14 +11,6 @@
 #include <vector>
 
 namespace pemu::discretization {
-
-namespace {
-
-double dot(const mesh::Vec3& a, const mesh::Vec3& b) noexcept {
-  return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-}  // namespace
 
 PoissonFvm::PoissonFvm(
     const mesh::IMesh& mesh, const field::CellField<double>& source,

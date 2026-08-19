@@ -1,9 +1,10 @@
 #include <pemu/mesh/moab_mesh.hpp>
+#include <pemu/mesh/geometry.hpp>
 
+#include <MBTagConventions.hpp>
+#include <moab/CN.hpp>
 #include <moab/Interface.hpp>
 #include <moab/Range.hpp>
-#include <moab/CN.hpp>
-#include <MBTagConventions.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -29,16 +30,8 @@ void checkMoab(const moab::ErrorCode error, const char* message) {
   }
 }
 
-// ============================================================
-// Small vector utilities
-// ============================================================
-
-double dot(const Vec3& a, const Vec3& b) noexcept {
-  return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
 double norm(const Vec3& v) noexcept {
-  return std::sqrt(dot(v, v));
+  return std::sqrt(mesh::dot(v, v));
 }
 
 Vec3 normalize(const Vec3& v) {
