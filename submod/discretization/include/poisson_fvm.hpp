@@ -16,6 +16,11 @@ class PoissonFvm {
   [[nodiscard]]
   linalg::LinearSystem assemble() const;
 
+  [[nodiscard]]
+  const mesh::IMesh& mesh() const noexcept {
+    return *mesh_;
+  }
+
  private:
   [[nodiscard]]
   double internalFaceCoefficient(mesh::FaceId face) const;
