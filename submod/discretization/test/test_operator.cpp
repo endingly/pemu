@@ -3,6 +3,7 @@
 #include <pemu/boundary/boundary_condition_set.hpp>
 #include <pemu/discretization/operators/diffusion_flux.hpp>
 #include <pemu/discretization/operators/divergence.hpp>
+#include <pemu/discretization/operators/upwind_advection_flux.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
 #include <pemu/field/cell_field.hpp>
@@ -31,6 +32,21 @@ class OperatorTest : public ::testing::Test {
 
   mesh::MoabMesh mesh_;
 };
+
+mesh::FaceId findBoundaryFace(const mesh::IMesh& mesh, mesh::BoundaryId id) {
+  for (mesh::FaceId face = 0; face < mesh.numFaces(); ++face) {
+
+    if (!mesh.isBoundary(face)) {
+      continue;
+    }
+
+    if (mesh.boundaryId(face) == id) {
+      return face;
+    }
+  }
+
+  throw std::runtime_error("boundary face not found");
+}
 
 };  // namespace
 
@@ -192,6 +208,234 @@ TEST_F(OperatorTest, DivergenceRejectsDifferentMeshes) {
 
   EXPECT_THROW(discretization::operators::divergence(flux, div),
                std::invalid_argument);
+}
+
+TEST_F(OperatorTest, UpwindFluxUsesOwnerForPositiveVelocity) {
+  field::CellField<double> u(mesh_, 0.0);
+
+  u[0] = 2.0;
+  u[1] = 5.0;
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  const auto face = findInternalFace(mesh_);
+
+  const auto owner = mesh_.owner(face);
+
+  velocity[face] = 3.0;
+
+  discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux);
+
+  EXPECT_NEAR(flux[face], 3.0 * u[owner], 1e-12);
+}
+
+TEST_F(OperatorTest, UpwindFluxUsesNeighborForNegativeVelocity) {
+  field::CellField<double> u(mesh_, 0.0);
+
+  u[0] = 2.0;
+  u[1] = 5.0;
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  const auto face = findInternalFace(mesh_);
+
+  const auto neighbor = mesh_.neighbor(face);
+
+  velocity[face] = -3.0;
+
+  discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux);
+
+  EXPECT_NEAR(flux[face], -3.0 * u[neighbor], 1e-12);
+}
+
+TEST_F(OperatorTest, UpwindFluxUsesInteriorStateForOutflow) {
+  field::CellField<double> u(mesh_, 4.0);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  const auto face = findBoundaryFace(mesh_, mesh::BoundaryId{2});
+
+  const auto owner = mesh_.owner(face);
+
+  velocity[face] = +2.0;
+
+  //
+  // Intentionally no BC.
+  //
+  discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux);
+
+  EXPECT_NEAR(flux[face], 2.0 * u[owner], 1e-12);
+}
+
+TEST_F(OperatorTest, UpwindFluxUsesBoundaryStateForInflow) {
+  field::CellField<double> u(mesh_, 4.0);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(mesh::BoundaryId{1}, 7.0);
+
+  const auto face = findBoundaryFace(mesh_, mesh::BoundaryId{1});
+
+  velocity[face] = -2.0;
+
+  discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux);
+
+  EXPECT_NEAR(flux[face], -2.0 * 7.0, 1e-12);
+}
+
+TEST_F(OperatorTest, UpwindFluxRejectsMissingInflowBoundaryValue) {
+  field::CellField<double> u(mesh_, 1.0);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  const auto face = findBoundaryFace(mesh_, mesh::BoundaryId{1});
+
+  velocity[face] = -1.0;
+
+  EXPECT_THROW(
+      discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux),
+      std::runtime_error);
+}
+
+TEST_F(OperatorTest, UpwindFluxRejectsNeumannOnInflow) {
+  field::CellField<double> u(mesh_, 1.0);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setNeumann(mesh::BoundaryId{1}, 0.0);
+
+  const auto face = findBoundaryFace(mesh_, mesh::BoundaryId{1});
+
+  velocity[face] = -1.0;
+
+  EXPECT_THROW(
+      discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux),
+      std::runtime_error);
+}
+
+TEST_F(OperatorTest, ConstantStateHasZeroAdvectionDivergence) {
+  field::CellField<double> u(mesh_, 3.0);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  field::CellField<double> div(mesh_, 0.0);
+
+  // --------------------------------------------------------
+  // Constant velocity:
+  //
+  //     v = (1, 0)
+  //
+  // therefore:
+  //
+  //     v_n = v · n = n_x
+  // --------------------------------------------------------
+
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+
+    const auto normal = mesh_.faceNormal(face);
+
+    velocity[face] = normal.x;
+  }
+
+  // --------------------------------------------------------
+  // Left boundary is inflow:
+  //
+  //     u_in = 3
+  //
+  // same as interior constant solution.
+  //
+  // Other boundaries do not need values.
+  // --------------------------------------------------------
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(mesh::BoundaryId{1}, 3.0);
+
+  discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux);
+
+  discretization::operators::divergence(flux, div);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    EXPECT_NEAR(div[cell], 0.0, 1e-12);
+  }
+}
+
+TEST_F(OperatorTest, AdvectionFluxIsGloballyConservative) {
+  field::CellField<double> u(mesh_, 0.0);
+
+  u[0] = 2.0;
+  u[1] = 5.0;
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  field::CellField<double> div(mesh_, 0.0);
+
+  //
+  // Only internal transport.
+  //
+  const auto face = findInternalFace(mesh_);
+
+  velocity[face] = 1.0;
+
+  boundary::BoundaryConditionSet bc;
+
+  discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux);
+
+  discretization::operators::divergence(flux, div);
+
+  double total = 0.0;
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    total += div[cell] * mesh_.cellVolume(cell);
+  }
+
+  EXPECT_NEAR(total, 0.0, 1e-12);
+}
+
+TEST_F(OperatorTest, UpwindFluxRejectsDifferentMeshes) {
+  mesh::MoabMesh other_mesh(testMeshPath().string());
+
+  field::CellField<double> u(mesh_, 1.0);
+
+  field::FaceField<double> velocity(other_mesh, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  EXPECT_THROW(
+      discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux),
+      std::invalid_argument);
 }
 
 };  // namespace pemu::discretization::test
