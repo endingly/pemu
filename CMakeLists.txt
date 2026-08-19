@@ -10,6 +10,7 @@ if(BUILD_TESTING)
     include(CTest)
     enable_testing()
     include(GoogleTest)
+    set(PEMU_MESH_TEST_DATA_DIR "${PROJECT_SOURCE_DIR}/data/meshfiles")
 endif()
 
 add_subdirectory(submod)

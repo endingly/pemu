@@ -18,7 +18,7 @@ if(BUILD_TESTING)
     target_compile_definitions(
         test_field
         PRIVATE
-        PEMU_MESH_TEST_DATA_DIR=\"${PROJECT_SOURCE_DIR}/submod/mesh/test\"
+        PEMU_MESH_TEST_DATA_DIR="${PEMU_MESH_TEST_DATA_DIR}"
     )
     gtest_discover_tests(test_field)
 endif()

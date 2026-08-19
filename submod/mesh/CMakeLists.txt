@@ -17,7 +17,7 @@ if(BUILD_TESTING)
     target_compile_definitions(
         test_mesh
         PRIVATE
-            PEMU_MESH_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/test\"   
+            PEMU_MESH_TEST_DATA_DIR="${PEMU_MESH_TEST_DATA_DIR}"  
     )
     gtest_discover_tests(test_mesh)
 endif()
