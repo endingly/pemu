@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <pemu/field/cell_field.hpp>
+#include <pemu/field/face_field.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 #include <pemu/physics/charge_polarity.hpp>
 #include <stdexcept>
@@ -10,6 +11,8 @@
 #include <vector>
 
 namespace pemu::physics {
+
+enum class SpeciesTransportModel { Immobile, DriftDiffusion };
 
 struct SpeciesId {
   std::uint32_t value{};
@@ -26,14 +29,21 @@ struct SpeciesProperties {
   double mobility{};
   double diffusivity{};
 
+  SpeciesTransportModel transport_model{SpeciesTransportModel::Immobile};
+
   [[nodiscard]]
   bool isCharged() const noexcept {
     return charge != 0.0;
   }
 
   [[nodiscard]]
+  bool isTransported() const noexcept {
+    return transport_model == SpeciesTransportModel::DriftDiffusion;
+  }
+
+  [[nodiscard]]
   ChargePolarity polarity() const {
-    if (charge == 0.0) {
+    if (!isCharged()) {
       throw std::logic_error("neutral species has no charge polarity");
     }
 
@@ -51,6 +61,20 @@ struct SpeciesProperties {
 
     if (diffusivity < 0.0) {
       throw std::invalid_argument("diffusivity must be non-negative");
+    }
+
+    if (isTransported() && diffusivity <= 0.0) {
+
+      throw std::invalid_argument(
+          "drift-diffusion species "
+          "requires positive diffusivity");
+    }
+
+    if (isTransported() && !isCharged() && mobility != 0.0) {
+
+      throw std::invalid_argument(
+          "neutral drift-diffusion species "
+          "cannot have electric mobility");
     }
   }
 };
@@ -150,6 +174,49 @@ class SpeciesCellFields {
   const mesh::IMesh* mesh_;
 
   std::vector<field::CellField<double>> fields_;
+};
+
+class SpeciesFaceFields {
+ public:
+  SpeciesFaceFields(const mesh::IMesh& mesh, std::size_t species_count,
+                    double initial_value = 0.0)
+      : mesh_(&mesh) {
+    fields_.reserve(species_count);
+
+    for (std::size_t i = 0; i < species_count; ++i) {
+
+      fields_.emplace_back(mesh, initial_value);
+    }
+  }
+
+  [[nodiscard]]
+  std::size_t size() const noexcept {
+    return fields_.size();
+  }
+
+  [[nodiscard]]
+  const mesh::IMesh& mesh() const noexcept {
+    return *mesh_;
+  }
+
+  field::FaceField<double>& operator[](SpeciesId id) {
+    return fields_.at(id.value);
+  }
+
+  const field::FaceField<double>& operator[](SpeciesId id) const {
+    return fields_.at(id.value);
+  }
+
+  void fill(double value) {
+    for (auto& field : fields_) {
+      field.fill(value);
+    }
+  }
+
+ private:
+  const mesh::IMesh* mesh_;
+
+  std::vector<field::FaceField<double>> fields_;
 };
 
 }  // namespace pemu::physics
