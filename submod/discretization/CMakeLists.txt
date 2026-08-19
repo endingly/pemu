@@ -14,6 +14,7 @@ target_link_libraries(
     pemu::field
     pemu::linalg
     pemu::mesh
+    pemu::physics
 )
 
 if(BUILD_TESTING)
