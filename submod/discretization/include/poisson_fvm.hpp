@@ -13,6 +13,10 @@ class PoissonFvm {
              double epsilon,
              const boundary::BoundaryConditionSet& boundary_conditions);
 
+  void assembleMatrix(linalg::SparseMatrix& A) const;
+
+  void assembleRhs(linalg::Vector& b) const;
+
   [[nodiscard]]
   linalg::LinearSystem assemble() const;
 

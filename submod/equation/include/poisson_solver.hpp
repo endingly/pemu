@@ -25,10 +25,16 @@ class PoissonSolver {
 
   void reset();
 
+  linalg::SolverStatus initialize();
+
+  bool is_initialized() const noexcept { return initialized_; }
+
  private:
   discretization::PoissonFvm discretization_;
-
   std::unique_ptr<linalg::ISolver> linear_solver_;
+  linalg::SparseMatrix A_;
+  linalg::Vector b_;
+  bool initialized_{false};
 };
 
 }  // namespace pemu::equation

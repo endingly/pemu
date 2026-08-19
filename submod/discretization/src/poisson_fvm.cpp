@@ -145,6 +145,157 @@ double PoissonFvm::boundaryFaceCoefficient(const mesh::FaceId face) const {
   return epsilon_ * mesh_->faceArea(face) / distance;
 }
 
+void PoissonFvm::assembleRhs(linalg::Vector& b) const {
+  const auto num_cells = static_cast<linalg::Index>(mesh_->numCells());
+
+  b = linalg::Vector::Zero(num_cells);
+
+  // --------------------------------------------------------
+  // Volume source
+  //
+  // b_P = rho_P V_P
+  // --------------------------------------------------------
+
+  for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+
+    const auto row = static_cast<linalg::Index>(cell);
+
+    b[row] += (*source_)[cell] * mesh_->cellVolume(cell);
+  }
+
+  // --------------------------------------------------------
+  // Boundary terms
+  // --------------------------------------------------------
+
+  for (mesh::FaceId face = 0; face < mesh_->numFaces(); ++face) {
+
+    if (!mesh_->isBoundary(face)) {
+      continue;
+    }
+
+    const auto owner = mesh_->owner(face);
+
+    const auto p = static_cast<linalg::Index>(owner);
+
+    const auto boundary_id = mesh_->boundaryId(face);
+
+    if (boundary_id == mesh::invalid_boundary) {
+
+      throw std::runtime_error("boundary face has no BoundaryId");
+    }
+
+    const auto& condition = boundary_conditions_->at(boundary_id);
+
+    std::visit(
+        [&](const auto& bc) {
+          using BcType = std::remove_cvref_t<decltype(bc)>;
+
+          // --------------------------------------------
+          // Dirichlet:
+          //
+          // b_P += c phi_b
+          // --------------------------------------------
+
+          if constexpr (std::same_as<BcType, boundary::Dirichlet>) {
+
+            const double c = boundaryFaceCoefficient(face);
+
+            b[p] += c * bc.value;
+          }
+
+          // --------------------------------------------
+          // Neumann:
+          //
+          // q = -epsilon grad(phi) dot n
+          //
+          // b_P -= q A_f
+          // --------------------------------------------
+
+          else if constexpr (std::same_as<BcType, boundary::Neumann>) {
+
+            b[p] -= bc.value * mesh_->faceArea(face);
+          }
+        },
+        condition);
+  }
+}
+
+void PoissonFvm::assembleMatrix(linalg::SparseMatrix& A) const {
+  using Triplet = Eigen::Triplet<linalg::Scalar, linalg::Index>;
+
+  const auto num_cells = static_cast<linalg::Index>(mesh_->numCells());
+
+  A.resize(num_cells, num_cells);
+
+  std::vector<Triplet> entries;
+
+  entries.reserve(mesh_->numFaces() * 4);
+
+  for (mesh::FaceId face = 0; face < mesh_->numFaces(); ++face) {
+
+    const auto owner = mesh_->owner(face);
+
+    const auto p = static_cast<linalg::Index>(owner);
+
+    // ----------------------------------------------------
+    // Internal face
+    // ----------------------------------------------------
+
+    if (!mesh_->isBoundary(face)) {
+
+      const auto neighbor = mesh_->neighbor(face);
+
+      const auto n = static_cast<linalg::Index>(neighbor);
+
+      const double c = internalFaceCoefficient(face);
+
+      entries.emplace_back(p, p, +c);
+
+      entries.emplace_back(p, n, -c);
+
+      entries.emplace_back(n, n, +c);
+
+      entries.emplace_back(n, p, -c);
+
+      continue;
+    }
+
+    // ----------------------------------------------------
+    // Boundary face
+    // ----------------------------------------------------
+
+    const auto boundary_id = mesh_->boundaryId(face);
+
+    if (boundary_id == mesh::invalid_boundary) {
+
+      throw std::runtime_error("boundary face has no BoundaryId");
+    }
+
+    const auto& condition = boundary_conditions_->at(boundary_id);
+
+    std::visit(
+        [&](const auto& bc) {
+          using BcType = std::remove_cvref_t<decltype(bc)>;
+
+          if constexpr (std::same_as<BcType, boundary::Dirichlet>) {
+
+            const double c = boundaryFaceCoefficient(face);
+
+            entries.emplace_back(p, p, c);
+          }
+
+          else if constexpr (std::same_as<BcType, boundary::Neumann>) {
+
+            // Pure Neumann contributes
+            // nothing to A.
+          }
+        },
+        condition);
+  }
+  A.setFromTriplets(entries.begin(), entries.end());
+  A.makeCompressed();
+}
+
 // ============================================================
 // Assembly
 //
@@ -187,137 +338,9 @@ double PoissonFvm::boundaryFaceCoefficient(const mesh::FaceId face) const {
 // ============================================================
 
 linalg::LinearSystem PoissonFvm::assemble() const {
-  using Triplet = Eigen::Triplet<linalg::Scalar, linalg::Index>;
-
-  const auto num_cells = mesh_->numCells();
-
-  linalg::LinearSystem system{
-      .A = linalg::SparseMatrix(static_cast<linalg::Index>(num_cells),
-                                static_cast<linalg::Index>(num_cells)),
-      .b = linalg::Vector::Zero(static_cast<linalg::Index>(num_cells))};
-
-  std::vector<Triplet> entries;
-
-  //
-  // Rough estimate:
-  //
-  // each internal face contributes four triplets,
-  // boundary Dirichlet contributes one.
-  //
-  entries.reserve(mesh_->numFaces() * 4);
-
-  // --------------------------------------------------------
-  // Volume source term
-  //
-  //     b_P = rho_P V_P
-  // --------------------------------------------------------
-
-  for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
-
-    const auto row = static_cast<linalg::Index>(cell);
-
-    system.b[row] = (*source_)[cell] * mesh_->cellVolume(cell);
-  }
-
-  // --------------------------------------------------------
-  // Face contributions
-  // --------------------------------------------------------
-
-  for (mesh::FaceId face = 0; face < mesh_->numFaces(); ++face) {
-
-    const auto owner = mesh_->owner(face);
-
-    const auto p = static_cast<linalg::Index>(owner);
-
-    // ====================================================
-    // Internal face
-    // ====================================================
-
-    if (!mesh_->isBoundary(face)) {
-
-      const auto neighbor = mesh_->neighbor(face);
-
-      const auto n = static_cast<linalg::Index>(neighbor);
-
-      const double coefficient = internalFaceCoefficient(face);
-
-      //
-      // Owner equation
-      //
-      entries.emplace_back(p, p, coefficient);
-
-      entries.emplace_back(p, n, -coefficient);
-
-      //
-      // Neighbor equation
-      //
-      entries.emplace_back(n, n, coefficient);
-
-      entries.emplace_back(n, p, -coefficient);
-
-      continue;
-    }
-
-    // ====================================================
-    // Boundary face
-    // ====================================================
-
-    const auto boundary_id = mesh_->boundaryId(face);
-
-    if (boundary_id == mesh::invalid_boundary) {
-
-      throw std::runtime_error("boundary face has no BoundaryId");
-    }
-
-    if (!boundary_conditions_->contains(boundary_id)) {
-
-      throw std::runtime_error("boundary face has no boundary condition");
-    }
-
-    const auto& condition = boundary_conditions_->at(boundary_id);
-
-    std::visit(
-        [&](const auto& bc) {
-          using BcType = std::remove_cvref_t<decltype(bc)>;
-
-          // --------------------------------------------
-          // Dirichlet
-          // --------------------------------------------
-
-          if constexpr (std::same_as<BcType, boundary::Dirichlet>) {
-
-            const double coefficient = boundaryFaceCoefficient(face);
-
-            entries.emplace_back(p, p, coefficient);
-
-            system.b[p] += coefficient * bc.value;
-          }
-
-          // --------------------------------------------
-          // Neumann
-          //
-          // Convention:
-          //
-          //   value =
-          //     -epsilon grad(phi) dot n
-          //
-          // therefore:
-          //
-          //   b -= q A
-          // --------------------------------------------
-
-          else if constexpr (std::same_as<BcType, boundary::Neumann>) {
-
-            system.b[p] -= bc.value * mesh_->faceArea(face);
-          }
-        },
-        condition);
-  }
-
-  system.A.setFromTriplets(entries.begin(), entries.end());
-
-  system.A.makeCompressed();
-
+  linalg::LinearSystem system;
+  assembleMatrix(system.A);
+  assembleRhs(system.b);
   return system;
 }
 

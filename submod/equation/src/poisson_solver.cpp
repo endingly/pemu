@@ -17,73 +17,60 @@ PoissonSolver::PoissonSolver(discretization::PoissonFvm discretization,
 }
 
 linalg::SolverResult PoissonSolver::solve(field::CellField<double>& solution) {
-  // --------------------------------------------------------
-  // Field / mesh consistency
-  // --------------------------------------------------------
-
   if (&solution.mesh() != &discretization_.mesh()) {
-
     throw std::invalid_argument(
-        "Poisson solution field belongs "
-        "to a different mesh");
+        "Poisson solution field "
+        "belongs to another mesh");
   }
-
-  // --------------------------------------------------------
-  // PDE discretization
-  //
-  //     -div(epsilon grad(phi)) = rho
-  //
-  //             ↓
-  //
-  //            A phi = b
-  // --------------------------------------------------------
-
-  auto system = discretization_.assemble();
-
-  // --------------------------------------------------------
-  // Symbolic analysis
-  // --------------------------------------------------------
-
-  const auto analyze_status = linear_solver_->analyzePattern(system.A);
-
-  if (analyze_status != linalg::SolverStatus::Success) {
-
-    return {.status = analyze_status};
+  if (!initialized_) {
+    const auto status = initialize();
+    if (status != linalg::SolverStatus::Success) {
+      return {.status = status};
+    }
   }
-
   // --------------------------------------------------------
-  // Numeric factorization
+  // Only RHS is rebuilt.
   // --------------------------------------------------------
-
-  const auto factor_status = linear_solver_->factorize(system.A);
-
-  if (factor_status != linalg::SolverStatus::Success) {
-
-    return {.status = factor_status};
-  }
-
+  discretization_.assembleRhs(b_);
   // --------------------------------------------------------
-  // Map CellField storage directly to Eigen.
-  //
-  // CellField<double> is contiguous:
-  //
-  //     solution.data()
-  //
-  // Therefore no temporary Vector + copy-back is required.
+  // Solve directly into CellField storage.
   // --------------------------------------------------------
-
   Eigen::Map<linalg::Vector> x(solution.data(),
                                static_cast<linalg::Index>(solution.size()));
-
-  // --------------------------------------------------------
-  // Linear solve
-  // --------------------------------------------------------
-
-  return linear_solver_->solve(system.b, x);
+  return linear_solver_->solve(b_, x);
 }
 
 void PoissonSolver::reset() {
   linear_solver_->reset();
+  A_.resize(0, 0);
+  b_.resize(0);
+  initialized_ = false;
+}
+
+linalg::SolverStatus PoissonSolver::initialize() {
+  discretization_.assembleMatrix(A_);
+
+  const auto analyze_status = linear_solver_->analyzePattern(A_);
+
+  if (analyze_status != linalg::SolverStatus::Success) {
+
+    initialized_ = false;
+
+    return analyze_status;
+  }
+
+  const auto factor_status = linear_solver_->factorize(A_);
+
+  if (factor_status != linalg::SolverStatus::Success) {
+
+    initialized_ = false;
+
+    return factor_status;
+  }
+
+  initialized_ = true;
+
+  return linalg::SolverStatus::Success;
 }
 
 }  // namespace pemu::equation

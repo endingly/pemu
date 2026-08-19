@@ -19,6 +19,54 @@ class PoissonSolverTest : public ::testing::Test {
   mesh::MoabMesh mesh_;
 };
 
+class CountingSolver final : public linalg::ISolver {
+ public:
+  int analyze_count{};
+  int factorize_count{};
+  int solve_count{};
+
+  linalg::SolverStatus analyzePattern(const linalg::SparseMatrix&) override {
+    ++analyze_count;
+
+    analyzed_ = true;
+
+    return linalg::SolverStatus::Success;
+  }
+
+  linalg::SolverStatus factorize(const linalg::SparseMatrix&) override {
+    ++factorize_count;
+
+    factorized_ = true;
+
+    return linalg::SolverStatus::Success;
+  }
+
+  linalg::SolverResult solve(linalg::ConstVectorRef b,
+                             linalg::VectorRef x) override {
+    ++solve_count;
+
+    //
+    // This mock does not actually solve.
+    //
+    x = b;
+
+    return {.status = linalg::SolverStatus::Success};
+  }
+
+  void reset() override {
+    analyzed_ = false;
+    factorized_ = false;
+  }
+
+  bool isAnalyzed() const noexcept override { return analyzed_; }
+
+  bool isFactorized() const noexcept override { return factorized_; }
+
+ private:
+  bool analyzed_{false};
+  bool factorized_{false};
+};
+
 }  // namespace
 
 TEST_F(PoissonSolverTest, SolvesConstantDirichletSolution) {
@@ -111,6 +159,37 @@ TEST_F(PoissonSolverTest, RejectsNullLinearSolver) {
 
   EXPECT_THROW(equation::PoissonSolver(std::move(poisson), nullptr),
                std::invalid_argument);
+}
+
+TEST_F(PoissonSolverTest, ReusesFactorizationAcrossSolves) {
+  field::CellField<double> source(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, 0.0);
+  bc.setDirichlet(2, 0.0);
+  bc.setDirichlet(3, 0.0);
+  bc.setDirichlet(4, 0.0);
+
+  discretization::PoissonFvm poisson(mesh_, source, 1.0, bc);
+
+  auto backend = std::make_unique<CountingSolver>();
+
+  auto* raw_backend = backend.get();
+
+  equation::PoissonSolver solver(std::move(poisson), std::move(backend));
+
+  field::CellField<double> phi(mesh_, 0.0);
+
+  ASSERT_TRUE(solver.solve(phi).success());
+
+  ASSERT_TRUE(solver.solve(phi).success());
+
+  EXPECT_EQ(raw_backend->analyze_count, 1);
+
+  EXPECT_EQ(raw_backend->factorize_count, 1);
+
+  EXPECT_EQ(raw_backend->solve_count, 2);
 }
 
 };  // namespace pemu::equation::test
