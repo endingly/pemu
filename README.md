@@ -28,7 +28,7 @@
 `data/meshfiles/two_quads.msh` 是两个相邻的单位四边形，收敛性测试使用
 `poisson_{8,16,32,64}x{8,16,32,64}.msh`。
 
-# 构建与运行
+## 构建与运行
 
 项目使用 CMake 3.30、C++23、Ninja 与 vcpkg manifest 模式。依赖为 Eigen3、MOAB、
 SuiteSparse（CHOLMOD、UMFPACK）、GoogleTest 和 fmt；版本基线记录于

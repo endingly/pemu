@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <pemu/boundary/boundary_condition_set.hpp>
+#include <pemu/discretization/operators/bernoulli.hpp>
 #include <pemu/discretization/operators/diffusion_flux.hpp>
 #include <pemu/discretization/operators/divergence.hpp>
+#include <pemu/discretization/operators/scharfetter_gummel_flux.hpp>
 #include <pemu/discretization/operators/upwind_advection_flux.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
@@ -436,6 +438,242 @@ TEST_F(OperatorTest, UpwindFluxRejectsDifferentMeshes) {
   EXPECT_THROW(
       discretization::operators::upwindAdvectionFlux(u, velocity, bc, flux),
       std::invalid_argument);
+}
+
+TEST(BernoulliTest, ValueAtZeroIsOne) {
+  EXPECT_DOUBLE_EQ(discretization::operators::bernoulli(0.0), 1.0);
+}
+
+TEST(BernoulliTest, MatchesKnownValues) {
+  EXPECT_NEAR(discretization::operators::bernoulli(1.0), 0.5819767068693265,
+              1e-14);
+  EXPECT_NEAR(discretization::operators::bernoulli(-1.0), 1.5819767068693265,
+              1e-14);
+}
+
+TEST(BernoulliTest, SatisfiesDifferenceIdentity) {
+  for (const double x : {-20.0, -5.0, -1.0, -0.01, 0.01, 1.0, 5.0, 20.0}) {
+    EXPECT_NEAR(discretization::operators::bernoulli(-x) -
+                    discretization::operators::bernoulli(x),
+                x, 1e-12);
+  }
+}
+
+TEST(BernoulliTest, IsStableNearZero) {
+  const double x = 1e-12;
+
+  const double expected = 1.0 - x / 2.0;
+
+  EXPECT_NEAR(discretization::operators::bernoulli(x), expected, 1e-15);
+}
+
+TEST(BernoulliTest, HasCorrectLargeArgumentLimits) {
+  EXPECT_LT(discretization::operators::bernoulli(100.0), 1e-40);
+  EXPECT_NEAR(discretization::operators::bernoulli(-100.0), 100.0, 1e-12);
+}
+
+TEST_F(OperatorTest, ScharfetterGummelReducesToDiffusionAtZeroVelocity) {
+  field::CellField<double> u(mesh_, 0.0);
+
+  u[0] = 2.0;
+  u[1] = 5.0;
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> sg_flux(mesh_, 0.0);
+
+  field::FaceField<double> diffusion_flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, 0.0);
+  bc.setDirichlet(2, 0.0);
+  bc.setDirichlet(3, 0.0);
+  bc.setDirichlet(4, 0.0);
+
+  constexpr double D = 2.0;
+
+  discretization::operators::scharfetterGummelFlux(u, velocity, D, bc, sg_flux);
+
+  discretization::operators::diffusionFlux(u, D, bc, diffusion_flux);
+
+  const auto face = findInternalFace(mesh_);
+
+  EXPECT_NEAR(sg_flux[face], diffusion_flux[face], 1e-12);
+}
+
+TEST_F(OperatorTest,
+       ScharfetterGummelApproachesOwnerUpwindForStrongPositiveDrift) {
+  field::CellField<double> u(mesh_, 0.0);
+
+  const auto face = findInternalFace(mesh_);
+
+  const auto owner = mesh_.owner(face);
+
+  const auto neighbor = mesh_.neighbor(face);
+
+  u[owner] = 2.0;
+
+  u[neighbor] = 5.0;
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  velocity[face] = 1.0;
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, 0.0);
+  bc.setDirichlet(2, 0.0);
+  bc.setDirichlet(3, 0.0);
+  bc.setDirichlet(4, 0.0);
+
+  discretization::operators::scharfetterGummelFlux(u, velocity, 1e-3, bc, flux);
+
+  EXPECT_NEAR(flux[face], 1.0 * u[owner], 1e-10);
+}
+
+TEST_F(OperatorTest,
+       ScharfetterGummelApproachesNeighborUpwindForStrongNegativeDrift) {
+  field::CellField<double> u(mesh_, 0.0);
+
+  const auto face = findInternalFace(mesh_);
+
+  const auto owner = mesh_.owner(face);
+
+  const auto neighbor = mesh_.neighbor(face);
+
+  u[owner] = 2.0;
+
+  u[neighbor] = 5.0;
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  velocity[face] = -1.0;
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, 0.0);
+  bc.setDirichlet(2, 0.0);
+  bc.setDirichlet(3, 0.0);
+  bc.setDirichlet(4, 0.0);
+
+  discretization::operators::scharfetterGummelFlux(u, velocity, 1e-3, bc, flux);
+
+  EXPECT_NEAR(flux[face], -1.0 * u[neighbor], 1e-10);
+}
+
+TEST_F(OperatorTest, ScharfetterGummelPreservesConstantStateFlux) {
+  constexpr double value = 3.0;
+
+  constexpr double D = 0.2;
+
+  field::CellField<double> u(mesh_, value);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  //
+  // v = (1, 0)
+  //
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+
+    const auto normal = mesh_.faceNormal(face);
+
+    velocity[face] = normal.x;
+  }
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, value);
+  bc.setDirichlet(2, value);
+  bc.setDirichlet(3, value);
+  bc.setDirichlet(4, value);
+
+  discretization::operators::scharfetterGummelFlux(u, velocity, D, bc, flux);
+
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+
+    EXPECT_NEAR(flux[face], velocity[face] * value, 1e-12);
+  }
+}
+
+TEST_F(OperatorTest, ConstantSgFluxHasZeroDivergence) {
+  constexpr double value = 3.0;
+
+  field::CellField<double> u(mesh_, value);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  field::CellField<double> div(mesh_, 0.0);
+
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+
+    velocity[face] = mesh_.faceNormal(face).x;
+  }
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, value);
+  bc.setDirichlet(2, value);
+  bc.setDirichlet(3, value);
+  bc.setDirichlet(4, value);
+
+  discretization::operators::scharfetterGummelFlux(u, velocity, 0.2, bc, flux);
+
+  discretization::operators::divergence(flux, div);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+
+    EXPECT_NEAR(div[cell], 0.0, 1e-12);
+  }
+}
+
+TEST_F(OperatorTest, ScharfetterGummelExactlyPreservesExponentialEquilibrium) {
+  const auto face = findInternalFace(mesh_);
+
+  const auto owner = mesh_.owner(face);
+
+  const auto neighbor = mesh_.neighbor(face);
+
+  constexpr double D = 1.0;
+
+  constexpr double vn = 0.5;
+
+  const auto delta = mesh_.cellCenter(neighbor) - mesh_.cellCenter(owner);
+
+  const double distance = mesh::dot(delta, mesh_.faceNormal(face));
+
+  const double pe = vn * distance / D;
+
+  field::CellField<double> u(mesh_, 0.0);
+
+  u[owner] = 1.0;
+
+  u[neighbor] = std::exp(pe);
+
+  field::FaceField<double> velocity(mesh_, 0.0);
+
+  velocity[face] = vn;
+
+  field::FaceField<double> flux(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(1, 0.0);
+  bc.setDirichlet(2, 0.0);
+  bc.setDirichlet(3, 0.0);
+  bc.setDirichlet(4, 0.0);
+
+  discretization::operators::scharfetterGummelFlux(u, velocity, D, bc, flux);
+
+  EXPECT_NEAR(flux[face], 0.0, 1e-12);
 }
 
 };  // namespace pemu::discretization::test
