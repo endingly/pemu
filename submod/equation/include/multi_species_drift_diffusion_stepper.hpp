@@ -61,6 +61,11 @@ class MultiSpeciesDriftDiffusionStepper {
   }
 
   [[nodiscard]]
+  double timeStep() const noexcept {
+    return dt_;
+  }
+
+  [[nodiscard]]
   double transportCfl(physics::SpeciesId id) const {
     auto _ = species_->at(id);
     const auto index = static_cast<std::size_t>(id.value);
@@ -69,6 +74,9 @@ class MultiSpeciesDriftDiffusionStepper {
     }
     return transport_steppers_[index]->maxTransportCfl();
   }
+
+  void advanceTransport(physics::SpeciesCellFields& density,
+                        const physics::SpeciesCellFields& source);
 
  private:
   static std::unique_ptr<linalg::ISolver> validateBackend(
@@ -90,6 +98,7 @@ class MultiSpeciesDriftDiffusionStepper {
   equation::PoissonSolver poisson_solver_;
   std::vector<std::unique_ptr<ExplicitSpeciesContinuityStepper>>
       transport_steppers_;
+  bool electrostatics_ready_{false};
 };
 
 };  // namespace pemu::equation

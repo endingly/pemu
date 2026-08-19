@@ -77,6 +77,8 @@ linalg::SolverResult MultiSpeciesDriftDiffusionStepper::updateElectrostatics(
     const physics::SpeciesCellFields& density) {
   validateFields(density);
 
+  electrostatics_ready_ = false;
+
   // ========================================================
   // rho = sum_s q_s n_s
   // ========================================================
@@ -125,9 +127,7 @@ linalg::SolverResult MultiSpeciesDriftDiffusionStepper::updateElectrostatics(
     const auto& properties = species_->at(id);
 
     if (!properties.isTransported()) {
-
       drift_velocity_[id].fill(0.0);
-
       continue;
     }
 
@@ -136,7 +136,62 @@ linalg::SolverResult MultiSpeciesDriftDiffusionStepper::updateElectrostatics(
         drift_velocity_[id]);
   }
 
+  electrostatics_ready_ = true;
+
   return result;
+}
+
+void MultiSpeciesDriftDiffusionStepper::advanceTransport(
+    physics::SpeciesCellFields& density,
+    const physics::SpeciesCellFields& source) {
+  validateFields(density);
+  validateFields(source);
+
+  if (!electrostatics_ready_) {
+    throw std::logic_error(
+        "electrostatics must be updated "
+        "before advancing transport");
+  }
+
+  // ========================================================
+  // PRECHECK every species first.
+  //
+  // Nothing may be modified before all CFL tests pass.
+  // ========================================================
+
+  for (std::size_t i = 0; i < species_->size(); ++i) {
+
+    if (!transport_steppers_[i]) {
+      continue;
+    }
+
+    if (transport_steppers_[i]->maxTransportCfl() > 1.0) {
+
+      throw std::runtime_error(
+          "multi-species explicit "
+          "transport CFL violated");
+    }
+  }
+
+  // ========================================================
+  // All species use the same frozen E^k.
+  // ========================================================
+
+  for (std::size_t i = 0; i < species_->size(); ++i) {
+
+    if (!transport_steppers_[i]) {
+      continue;
+    }
+
+    const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
+
+    transport_steppers_[i]->step(density[id], source[id]);
+  }
+
+  //
+  // density is now n^(k+1), while phi/E corresponded to n^k.
+  //
+  electrostatics_ready_ = false;
 }
 
 MultiSpeciesDriftDiffusionStepper::MultiSpeciesDriftDiffusionStepper(
@@ -182,59 +237,11 @@ MultiSpeciesDriftDiffusionStepper::MultiSpeciesDriftDiffusionStepper(
 linalg::SolverResult MultiSpeciesDriftDiffusionStepper::step(
     physics::SpeciesCellFields& density,
     const physics::SpeciesCellFields& source) {
-  validateFields(density);
-  validateFields(source);
-
-  // ========================================================
-  // n^k
-  //
-  // -> rho^k
-  // -> phi^k
-  // -> E^k
-  // -> v_s^k
-  // ========================================================
-
   const auto result = updateElectrostatics(density);
-
   if (!result.success()) {
     return result;
   }
-
-  // ========================================================
-  // PRECHECK ALL transported species.
-  //
-  // No density may be modified until all CFL checks pass.
-  // ========================================================
-
-  for (std::size_t i = 0; i < species_->size(); ++i) {
-
-    if (!transport_steppers_[i]) {
-      continue;
-    }
-
-    if (transport_steppers_[i]->maxTransportCfl() > 1.0) {
-
-      throw std::runtime_error(
-          "multi-species explicit "
-          "transport CFL violated");
-    }
-  }
-
-  // ========================================================
-  // Advance all transported species using the same E^k.
-  // ========================================================
-
-  for (std::size_t i = 0; i < species_->size(); ++i) {
-
-    if (!transport_steppers_[i]) {
-      continue;
-    }
-
-    const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
-
-    transport_steppers_[i]->step(density[id], source[id]);
-  }
-
+  advanceTransport(density, source);
   return result;
 }
 
