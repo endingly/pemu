@@ -1,8 +1,15 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 167 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 171 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
+
+## 日志与追踪（`submod/trace/test/test_trace.cpp`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `TraceSinkTest.NullSinkAcceptsStructuredEvents` | 默认空 sink 满足 trace concept，能同步接受结构化事件且不产生副作用。 |
+| `TraceSinkTest.OstreamSinkFormatsOneStructuredEventPerLine` | ostream sink 将严重级别、类别、事件名和强类型属性稳定地格式化为单行，并报告流状态。 |
 
 ## 边界条件（`submod/boundary/test/test_boundary.cpp`）
 
@@ -214,11 +221,13 @@
 | `FixedStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一步反应率都读取最新密度，而非复用旧值。 |
 | `FixedStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 反应模型读取的是本步泊松求解得到的电场。 |
 | `FixedStepPlasmaSimulationTest.RunAdvancesUntilClockIsFinished` | `run()` 严格运行到固定时钟指定的总步数。 |
+| `FixedStepPlasmaSimulationTest.EmitsOrderedTraceEventsAtEachPipelineStage` | 固定步长仿真按 run、步开始、电静力、反应率、源项和步提交的顺序发出结构化事件，并报告提交后的时间。 |
 | `FixedStepPlasmaSimulationTest.SolvesPoissonExactlyOncePerTimeStepAndReusesFactorization` | 每步只解一次泊松方程，且固定矩阵复用分析和分解。 |
 | `FixedStepPlasmaSimulationTest.RejectsClockTimeStepDifferentFromTransportTimeStep` | 仿真时钟与输运推进器的 $\Delta t$ 必须一致。 |
 | `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
+| `AdaptiveStepPlasmaSimulationTest.EmitsOrderedTraceEventsWithTimeStepDiagnostics` | 自适应仿真逐阶段发出 trace，且 `timestep.selected` 和 `step.completed` 分别准确报告实际步长与提交后的时间。 |
 | `AdaptiveStepPlasmaSimulationTest.AdvanceOneStepEvaluatesReactionAndUpdatesSpecies` | 单个自适应步完成电静力、反应率、化学源项和物种更新，且记录实际步长。 |
 | `AdaptiveStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一个自适应步都从最新粒子密度重新计算反应率。 |
 | `AdaptiveStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 自适应反应模型读取的电场来自同一时间层的泊松求解。 |

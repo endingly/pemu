@@ -15,6 +15,7 @@
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
 #include <pemu/simulation/fixed_step_plasma_simulation.hpp>
+#include <pemu/trace/trace.hpp>
 
 #include <mp-units/systems/si.h>
 
@@ -22,9 +23,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -344,6 +347,36 @@ struct NoReactionEvaluator {
 
                   physics::ReactionRateFields&) const noexcept {}
 };
+
+struct RecordingTraceSink {
+  std::vector<std::string>* names{};
+  std::vector<std::string>* categories{};
+  std::vector<double>* selected_time_steps{};
+  std::vector<double>* completed_times{};
+
+  void operator()(const pemu::trace::TraceEvent& event) const noexcept {
+    names->emplace_back(event.name);
+    categories->emplace_back(event.category);
+
+    for (const auto& attribute : event.attributes) {
+      const auto* value = std::get_if<double>(&attribute.value);
+
+      if (value == nullptr) {
+        continue;
+      }
+
+      if (event.name == "timestep.selected" && attribute.name == "dt") {
+        selected_time_steps->push_back(*value);
+      }
+
+      if (event.name == "step.completed" && attribute.name == "time") {
+        completed_times->push_back(*value);
+      }
+    }
+  }
+};
+
+static_assert(pemu::trace::TraceSink<RecordingTraceSink>);
 
 // ============================================================
 // Counting linear-solver backend.
@@ -877,6 +910,62 @@ TEST_F(FixedStepPlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
   EXPECT_NEAR(simulation.time(), dt * static_cast<double>(total_steps), 1e-14);
 }
 
+TEST_F(FixedStepPlasmaSimulationTest,
+       EmitsOrderedTraceEventsAtEachPipelineStage) {
+  constexpr double dt = 0.01;
+  constexpr std::size_t total_steps = 2;
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+
+  std::vector<std::string> names;
+  std::vector<std::string> categories;
+  std::vector<double> selected_time_steps;
+  std::vector<double> completed_times;
+  names.reserve(12);
+  categories.reserve(12);
+  completed_times.reserve(2);
+  const RecordingTraceSink sink{.names = &names,
+                                .categories = &categories,
+                                .selected_time_steps = &selected_time_steps,
+                                .completed_times = &completed_times};
+
+  FixedStepPlasmaSimulation simulation(density, reactions, transport,
+                                       NoReactionEvaluator{},
+                                       FixedStepClock(dt, total_steps), sink);
+
+  simulation.run();
+
+  const std::vector<std::string> expected_names{
+      "run.started",
+      "step.started",
+      "electrostatics.completed",
+      "reaction_rates.completed",
+      "sources.completed",
+      "step.completed",
+      "step.started",
+      "electrostatics.completed",
+      "reaction_rates.completed",
+      "sources.completed",
+      "step.completed",
+      "run.completed",
+  };
+  EXPECT_EQ(names, expected_names);
+  EXPECT_TRUE(std::ranges::all_of(categories, [](const std::string& category) {
+    return category == "simulation.fixed_step";
+  }));
+  EXPECT_TRUE(selected_time_steps.empty());
+  ASSERT_EQ(completed_times.size(), 2u);
+  EXPECT_NEAR(completed_times[0], 0.01, 1e-14);
+  EXPECT_NEAR(completed_times[1], 0.02, 1e-14);
+}
+
 // ============================================================
 // 5. Exactly one Poisson solve per timestep.
 //
@@ -1088,6 +1177,74 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
     EXPECT_NEAR(density[ids.electron][cell], 1.0, 1e-12);
     EXPECT_NEAR(density[ids.ion][cell], 1.0, 1e-12);
   }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       EmitsOrderedTraceEventsWithTimeStepDiagnostics) {
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  std::vector<std::string> names;
+  std::vector<std::string> categories;
+  std::vector<double> selected_time_steps;
+  std::vector<double> completed_times;
+  names.reserve(20);
+  categories.reserve(20);
+  selected_time_steps.reserve(3);
+  completed_times.reserve(3);
+  const RecordingTraceSink sink{.names = &names,
+                                .categories = &categories,
+                                .selected_time_steps = &selected_time_steps,
+                                .completed_times = &completed_times};
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          NoReactionEvaluator{},
+                                          AdaptiveTimeClock(0.1), sink);
+
+  simulation.run();
+
+  const std::vector<std::string> expected_names{
+      "run.started",
+      "step.started",
+      "electrostatics.completed",
+      "reaction_rates.completed",
+      "sources.completed",
+      "timestep.selected",
+      "step.completed",
+      "step.started",
+      "electrostatics.completed",
+      "reaction_rates.completed",
+      "sources.completed",
+      "timestep.selected",
+      "step.completed",
+      "step.started",
+      "electrostatics.completed",
+      "reaction_rates.completed",
+      "sources.completed",
+      "timestep.selected",
+      "step.completed",
+      "run.completed",
+  };
+  EXPECT_EQ(names, expected_names);
+  EXPECT_TRUE(std::ranges::all_of(categories, [](const std::string& category) {
+    return category == "simulation.adaptive_step";
+  }));
+  ASSERT_EQ(selected_time_steps.size(), 3u);
+  EXPECT_NEAR(selected_time_steps[0], 0.04, 1e-14);
+  EXPECT_NEAR(selected_time_steps[1], 0.04, 1e-14);
+  EXPECT_NEAR(selected_time_steps[2], 0.02, 1e-14);
+  ASSERT_EQ(completed_times.size(), 3u);
+  EXPECT_NEAR(completed_times[0], 0.04, 1e-14);
+  EXPECT_NEAR(completed_times[1], 0.08, 1e-14);
+  EXPECT_NEAR(completed_times[2], 0.1, 1e-14);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulationTest,

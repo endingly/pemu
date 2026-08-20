@@ -1,0 +1,134 @@
+# 诊断、日志与中间状态追踪
+
+## 1. 模块职责
+
+`pemu::trace` 是一个独立的纯 interface 模块。它只定义结构化 trace 事件、严重级别、
+sink concept，以及少量通用 sink；不理解网格、场、物种、反应或求解器。
+
+这个边界有意区分三类功能：
+
+- **log**：供人阅读的运行消息，例如一步开始、一步结束或求解失败；
+- **trace/diagnostics**：可由程序消费的结构化标量事件，例如当前步数、时间、残差和
+  自适应步长限制；
+- **result output**：电势、密度、电场等大规模网格场的快照与文件格式写出。
+
+当前模块实现结构化 trace，并提供将事件格式化为日志行的最小 ostream sink；它不是
+通用日志系统。结果输出不应把整个场塞进 trace 属性；后续更适合建立独立的
+`pemu::output` 或 `pemu::io` 模块，由它负责快照频率、网格关联和 VTK/HDF5 等格式。
+
+## 2. 依赖方向
+
+```text
+                     ┌───────────────┐
+                     │  pemu::trace  │
+                     │ 标准库类型与  │
+                     │ sink concept  │
+                     └───────┬───────┘
+                             │
+                             ▼
+equation ─────────────► simulation ─────────────► application
+返回 SolverResult、       组装结构化事件             选择 sink、
+TimeStepProposal                                   过滤与落盘
+```
+
+依赖规则如下：
+
+1. `trace` 不依赖其他 pemu 模块；
+2. `simulation` 公有依赖 `pemu::trace`，因为其模板化公共接口接受 trace sink；
+3. `equation`、`discretization` 和 `linalg` 返回诊断数据，但不主动写日志；
+4. `field`、`physics`、`mesh` 和 `unit` 不依赖 trace 模块；
+5. 最终应用决定输出到 `std::clog`、内存、测试收集器或未来的异步后端。
+
+这样不会出现底层数值算子偷偷访问全局 logger 的情况，也不会令一个线性求解器同时
+承担数值计算和 I/O 策略。
+
+## 3. 结构化事件模型
+
+`TraceEvent` 包含：
+
+- `category`：事件来源，例如 `simulation.fixed_step`；
+- `name`：事件名称，例如 `step.completed`；
+- `severity`：`Trace`、`Debug`、`Info`、`Warning`、`Error` 或 `Critical`；
+- `attributes`：由名称和强类型标量值构成的只读视图。
+
+属性当前支持布尔值、有符号/无符号整数、`double` 和 `std::string_view`。事件及属性是
+同步、非拥有视图：sink 必须在调用返回前消费它们；需要长期保存的 sink 必须复制名称
+和字符串值。仿真侧用定长栈数组构造属性，不为每个事件分配堆内存。
+
+`TraceSink` 是 concept，而不是虚函数接口：
+
+```cpp
+template <typename Sink>
+concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
+  { sink(event) } noexcept -> std::same_as<void>;
+};
+```
+
+sink 必须是 `noexcept`，诊断失败不能改变数值推进的控制流。`OstreamTraceSink` 捕获流
+异常并记录自身的失败状态；自定义网络或文件 sink 也应在内部处理重试、丢弃或错误计数。
+
+## 4. 与仿真的耦合
+
+固定步长和自适应仿真都增加了第二个模板参数 `TraceSink`，默认值为
+`pemu::trace::NullTraceSink`。sink 由构造函数注入并按值保存；有共享状态需求时，sink
+可以内部持有引用或指针。默认 sink 是空类型，通过 `[[no_unique_address]]` 保存，不引入
+虚调用，也不改变原有调用代码；`if constexpr` 同时跳过默认路径上的事件和属性构造。
+
+例如，将自适应仿真的事件直接写到标准日志流：
+
+```cpp
+#include <pemu/trace/ostream_trace_sink.hpp>
+
+pemu::trace::OstreamTraceSink trace(std::clog);
+
+pemu::simulation::AdaptiveStepPlasmaSimulation simulation(
+    density, reactions, transport, evaluator,
+    pemu::simulation::AdaptiveTimeClock(end_time), trace);
+
+simulation.run();
+```
+
+输出为一行一个事件，例如：
+
+```text
+[debug] simulation.adaptive_step.timestep.selected step=2 dt=0.02 transport_limit=inf positivity_limit=inf stability_limit=inf
+```
+
+当前事件顺序如下：
+
+| 事件 | 发生位置 | 主要属性 |
+| --- | --- | --- |
+| `run.started` | `run()` 进入时 | `step`、`time`、`end_time` |
+| `step.started` | 读取本步状态之前 | `step`、`time`，以及固定 `dt` 或自适应 `remaining_time` |
+| `electrostatics.completed` | 电荷密度、泊松方程和电场更新成功后 | `solver_status`、残差 |
+| `step.failed` | 电静力求解返回失败状态时 | `solver_status`、残差 |
+| `reaction_rates.completed` | 反应率求值后 | 反应率场数 |
+| `sources.completed` | 化学计量累积为物种源项后 | 源项场数 |
+| `timestep.selected` | 自适应推进完成步长选择与状态更新后 | `dt`、输运/正性/稳定性限制 |
+| `step.completed` | 状态更新成功且时钟提交后 | 新 `step`、新 `time`、实际 `dt`、相对残差 |
+| `run.completed` | 时钟到达终止条件后 | `step`、`time`、`end_time` |
+| `run.failed` | `run()` 收到失败的 `SolverResult` 后 | `step`、`time`、`end_time` |
+
+这里需要特别注意时间层：`step.completed` 中的密度已经是 $n^{k+1}$，但电势、电场、
+反应率和源项仍是用于本次推进的 $k$ 层工作量。trace 目前只输出标量状态，因此没有把
+二者误包装成同一时刻的场快照。
+
+## 5. 中间场诊断的扩展方式
+
+若以后需要追踪每步的粒子总数、最小密度、最大电场或电荷守恒误差，应增加显式的
+diagnostic probe：probe 在 simulation 的阶段边界读取只读场，计算少量标量，再通过
+同一个 `TraceEvent` 输出。因为场扫描是 $O(N)$ 操作，它必须是选择性启用的，不能为了
+空 `NullTraceSink` 每一步无条件计算。
+
+大规模场结果则走独立 output 管线。建议由 simulation 在“初始状态”“每隔若干步”及
+“终止状态”提供一致的 snapshot 观察点，output 模块负责深拷贝或同步写出。日志过滤、
+结果采样频率和数值推进步长应彼此独立。
+
+## 6. 当前限制
+
+- `OstreamTraceSink` 是同步输出，逐步打印大量事件会影响长时间仿真的吞吐；生产环境
+  应使用带级别过滤、步数抽样或后台队列的自定义 sink；
+- 当前显式记录 `SolverResult` 失败；反应 evaluator 或输运更新直接抛出的异常仍原样
+  向上传播，尚未额外生成异常事件；
+- 当前没有全局 logger、运行时 sink 注册表或跨线程排序，避免在单线程数值原型阶段
+  提前固定并发模型。

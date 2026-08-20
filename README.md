@@ -15,7 +15,8 @@
 
 1. [数学模型与离散化](doc/mathematics-and-discretization.md)：方程、符号、面通量和离散精度；
 2. [网格、边界与程序组织](doc/mesh-boundary-and-architecture.md)：数据约定及模块边界；
-3. [测试用例契约](doc/testcases.md)：全部 91 个测试各自保证的性质。
+3. [诊断、日志与中间状态追踪](doc/diagnostics-and-tracing.md)：结构化事件、sink 与仿真耦合；
+4. [测试用例契约](doc/testcases.md)：全部 171 个测试各自保证的性质。
 
 ## 当前适用范围
 

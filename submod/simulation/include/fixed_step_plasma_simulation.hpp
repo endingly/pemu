@@ -1,19 +1,25 @@
 #pragma once
 
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
+#include <pemu/trace/trace.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace pemu::simulation {
 
-template <typename ReactionRateEvaluator>
+template <typename ReactionRateEvaluator,
+          pemu::trace::TraceSink TraceSink = pemu::trace::NullTraceSink>
 class FixedStepPlasmaSimulation {
  public:
   using Stepper = equation::FixedStepMultiSpeciesDriftDiffusionStepper;
@@ -26,7 +32,9 @@ class FixedStepPlasmaSimulation {
 
                             ReactionRateEvaluator rate_evaluator,
 
-                            FixedStepClock clock)
+                            FixedStepClock clock,
+
+                            TraceSink trace_sink = {})
 
       : density_(&density),
 
@@ -37,6 +45,8 @@ class FixedStepPlasmaSimulation {
         rate_evaluator_(std::move(rate_evaluator)),
 
         clock_(std::move(clock)),
+
+        trace_sink_(std::move(trace_sink)),
 
         reaction_rates_(density.mesh(), reaction_network.size(), 0.0,
                         transport_stepper.fieldMetadata().reaction_rate),
@@ -87,6 +97,10 @@ class FixedStepPlasmaSimulation {
           "already finished");
     }
 
+    if constexpr (tracing_enabled_) {
+      emitStepStarted();
+    }
+
     // ----------------------------------------------------
     // 1.
     //
@@ -101,7 +115,15 @@ class FixedStepPlasmaSimulation {
     const auto result = transport_stepper_->updateElectrostatics(*density_);
 
     if (!result.success()) {
+      if constexpr (tracing_enabled_) {
+        emitSolverResult("step.failed", pemu::trace::Severity::Error, result);
+      }
       return result;
+    }
+
+    if constexpr (tracing_enabled_) {
+      emitSolverResult("electrostatics.completed", pemu::trace::Severity::Trace,
+                       result);
     }
 
     // ----------------------------------------------------
@@ -127,6 +149,11 @@ class FixedStepPlasmaSimulation {
 
                     reaction_rates_);
 
+    if constexpr (tracing_enabled_) {
+      emitWorkspaceCompleted("reaction_rates.completed",
+                             reaction_rates_.size());
+    }
+
     // ----------------------------------------------------
     // 3.
     //
@@ -138,6 +165,10 @@ class FixedStepPlasmaSimulation {
     source_.fill(0.0);
 
     reaction_network_->accumulateSources(reaction_rates_.span(), source_);
+
+    if constexpr (tracing_enabled_) {
+      emitWorkspaceCompleted("sources.completed", source_.size());
+    }
 
     // ----------------------------------------------------
     // 4.
@@ -162,6 +193,10 @@ class FixedStepPlasmaSimulation {
 
     clock_.advance();
 
+    if constexpr (tracing_enabled_) {
+      emitStepCompleted(result);
+    }
+
     return result;
   }
 
@@ -170,16 +205,28 @@ class FixedStepPlasmaSimulation {
   // ========================================================
 
   void run() {
+    if constexpr (tracing_enabled_) {
+      emitRunEvent("run.started", pemu::trace::Severity::Info);
+    }
+
     while (!clock_.finished()) {
 
       const auto result = advanceOneStep();
 
       if (!result.success()) {
 
+        if constexpr (tracing_enabled_) {
+          emitRunEvent("run.failed", pemu::trace::Severity::Error);
+        }
+
         throw std::runtime_error(
             "fixed-step plasma "
             "simulation failed");
       }
+    }
+
+    if constexpr (tracing_enabled_) {
+      emitRunEvent("run.completed", pemu::trace::Severity::Info);
     }
   }
 
@@ -274,6 +321,77 @@ class FixedStepPlasmaSimulation {
   }
 
  private:
+  static constexpr bool tracing_enabled_ =
+      !std::same_as<std::remove_cvref_t<TraceSink>, pemu::trace::NullTraceSink>;
+
+  void emitRunEvent(std::string_view name,
+                    pemu::trace::Severity severity) noexcept {
+    const std::array attributes{
+        pemu::trace::TraceAttribute{"step",
+                                  static_cast<std::uint64_t>(clock_.step())},
+        pemu::trace::TraceAttribute{"time", clock_.time()},
+        pemu::trace::TraceAttribute{"end_time", clock_.endTime()},
+    };
+    emitTrace(name, severity, attributes);
+  }
+
+  void emitStepStarted() noexcept {
+    const std::array attributes{
+        pemu::trace::TraceAttribute{"step",
+                                  static_cast<std::uint64_t>(clock_.step())},
+        pemu::trace::TraceAttribute{"time", clock_.time()},
+        pemu::trace::TraceAttribute{"dt", clock_.timeStep()},
+    };
+    emitTrace("step.started", pemu::trace::Severity::Trace, attributes);
+  }
+
+  void emitSolverResult(std::string_view name, pemu::trace::Severity severity,
+                        const linalg::SolverResult& result) noexcept {
+    const std::array attributes{
+        pemu::trace::TraceAttribute{"step",
+                                  static_cast<std::uint64_t>(clock_.step())},
+        pemu::trace::TraceAttribute{"solver_status",
+                                  static_cast<std::int64_t>(result.status)},
+        pemu::trace::TraceAttribute{"residual_norm", result.residual_norm},
+        pemu::trace::TraceAttribute{"relative_residual",
+                                  result.relative_residual},
+    };
+    emitTrace(name, severity, attributes);
+  }
+
+  void emitWorkspaceCompleted(std::string_view name,
+                              std::size_t field_count) noexcept {
+    const std::array attributes{
+        pemu::trace::TraceAttribute{"step",
+                                  static_cast<std::uint64_t>(clock_.step())},
+        pemu::trace::TraceAttribute{"field_count",
+                                  static_cast<std::uint64_t>(field_count)},
+    };
+    emitTrace(name, pemu::trace::Severity::Trace, attributes);
+  }
+
+  void emitStepCompleted(const linalg::SolverResult& result) noexcept {
+    const std::array attributes{
+        pemu::trace::TraceAttribute{"step",
+                                  static_cast<std::uint64_t>(clock_.step())},
+        pemu::trace::TraceAttribute{"time", clock_.time()},
+        pemu::trace::TraceAttribute{"dt", clock_.timeStep()},
+        pemu::trace::TraceAttribute{"relative_residual",
+                                  result.relative_residual},
+    };
+    emitTrace("step.completed", pemu::trace::Severity::Info, attributes);
+  }
+
+  template <std::size_t N>
+  void emitTrace(
+      std::string_view name, pemu::trace::Severity severity,
+      const std::array<pemu::trace::TraceAttribute, N>& attributes) noexcept {
+    trace_sink_({.category = "simulation.fixed_step",
+                 .name = name,
+                 .severity = severity,
+                 .attributes = attributes});
+  }
+
   void validateConfiguration() const {
     // ----------------------------------------------------
     // FixedStepClock and FixedStepStepper MUST use exactly
@@ -330,6 +448,8 @@ class FixedStepPlasmaSimulation {
   // --------------------------------------------------------
 
   FixedStepClock clock_;
+
+  [[no_unique_address]] TraceSink trace_sink_;
 
   // --------------------------------------------------------
   // Workspaces.

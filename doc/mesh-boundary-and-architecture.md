@@ -32,16 +32,21 @@ field + boundary + mesh + physics + linalg
                     │
                     ▼
               discretization ─► equation ─► simulation
+                                              ▲
+                                              │
+                                            trace
 ```
 
 - `mesh`：几何、拓扑与边界物理组；
 - `unit`：mp-units interface、项目级 quantity specification 及运行时单位元数据；
 - `field`：单元/面标量容器、强类型 ID 场集合及场单位元数据；
+- `trace`：结构化执行事件、sink concept 与通用同步 sink；
 - `boundary`：Dirichlet、Neumann 及其集合；
 - `discretization`：扩散、散度、迎风通量、泊松装配和后向欧拉装配；
 - `linalg`：Eigen 稀疏矩阵类型与求解器统一接口；
 - `equation`：将装配与求解流程封装成稳态 `PoissonSolver`、瞬态
   `TransientDiffusionSolver`。
+- `simulation`：组织电静力、反应、输运和时钟，并向注入的 trace sink 报告阶段状态。
 
 线性后端分两阶段工作：`analyzePattern(A)` 分析稀疏结构，`factorize(A)` 进行数值
 分解，最后 `solve(b,x)`。CHOLMOD 面向对称正定矩阵；UMFPACK 可处理一般非对称

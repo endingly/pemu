@@ -11,6 +11,7 @@ target_link_libraries(
     simulation
     PUBLIC
     pemu::equation
+    pemu::trace
 )
 
 if(BUILD_TESTING)
