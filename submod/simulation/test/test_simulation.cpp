@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <pemu/boundary/boundary_condition_set.hpp>
-#include <pemu/equation/multi_species_drift_diffusion_stepper.hpp>
+#include <pemu/equation/adaptive_step_multi_species_drift_diffusion_stepper.hpp>
+#include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
 #include <pemu/linalg/cholmod_solver.hpp>
@@ -8,8 +9,10 @@
 #include <pemu/mesh/moab_mesh.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
+#include <pemu/simulation/adaptive_step_plasma_simulation.hpp>
+#include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
-#include <pemu/simulation/plasma_simulation.hpp>
+#include <pemu/simulation/fixed_step_plasma_simulation.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -367,9 +370,16 @@ class CountingSolver final : public linalg::ISolver {
 // Fixture
 // ============================================================
 
-class PlasmaSimulationTest : public ::testing::Test {
+class FixedStepPlasmaSimulationTest : public ::testing::Test {
  protected:
-  PlasmaSimulationTest() : mesh_(twoQuadsMeshPath()) {}
+  FixedStepPlasmaSimulationTest() : mesh_(twoQuadsMeshPath()) {}
+
+  mesh::MoabMesh mesh_;
+};
+
+class AdaptiveStepPlasmaSimulationTest : public ::testing::Test {
+ protected:
+  AdaptiveStepPlasmaSimulationTest() : mesh_(twoQuadsMeshPath()) {}
 
   mesh::MoabMesh mesh_;
 };
@@ -463,7 +473,8 @@ TEST(FixedStepClockTest, RejectsAdvanceAfterCompletion) {
 //     n_i^(1) = 1 + 0.1*2 = 1.2
 // ============================================================
 
-TEST_F(PlasmaSimulationTest, AdvanceOneStepEvaluatesReactionAndUpdatesSpecies) {
+TEST_F(FixedStepPlasmaSimulationTest,
+       AdvanceOneStepEvaluatesReactionAndUpdatesSpecies) {
   constexpr double dt = 0.1;
 
   // --------------------------------------------------------
@@ -499,7 +510,7 @@ TEST_F(PlasmaSimulationTest, AdvanceOneStepEvaluatesReactionAndUpdatesSpecies) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species,
 
       1.0,  // epsilon
@@ -527,9 +538,9 @@ TEST_F(PlasmaSimulationTest, AdvanceOneStepEvaluatesReactionAndUpdatesSpecies) {
   // Simulation
   // --------------------------------------------------------
 
-  PlasmaSimulation simulation(density, reactions, transport, evaluator,
+  FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
-                              FixedStepClock(dt, 1));
+                                       FixedStepClock(dt, 1));
 
   // --------------------------------------------------------
   // Advance
@@ -588,7 +599,7 @@ TEST_F(PlasmaSimulationTest, AdvanceOneStepEvaluatesReactionAndUpdatesSpecies) {
 // transport once n differs from the original boundary value.
 // ============================================================
 
-TEST_F(PlasmaSimulationTest,
+TEST_F(FixedStepPlasmaSimulationTest,
        ReactionRateIsReevaluatedFromUpdatedStateEveryStep) {
   constexpr double dt = 0.1;
 
@@ -609,7 +620,7 @@ TEST_F(PlasmaSimulationTest,
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species,
 
       1.0, dt,
@@ -633,9 +644,9 @@ TEST_F(PlasmaSimulationTest,
 
       .observed_electron_density = &observations};
 
-  PlasmaSimulation simulation(density, reactions, transport, evaluator,
+  FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
-                              FixedStepClock(dt, 2));
+                                       FixedStepClock(dt, 2));
 
   ASSERT_TRUE(simulation.advanceOneStep().success());
 
@@ -684,7 +695,8 @@ TEST_F(PlasmaSimulationTest,
 // this test would see the default zero electric field instead.
 // ============================================================
 
-TEST_F(PlasmaSimulationTest, ReactionEvaluatorSeesCurrentElectricField) {
+TEST_F(FixedStepPlasmaSimulationTest,
+       ReactionEvaluatorSeesCurrentElectricField) {
   constexpr double dt = 1e-3;
 
   physics::SpeciesSet species;
@@ -704,7 +716,7 @@ TEST_F(PlasmaSimulationTest, ReactionEvaluatorSeesCurrentElectricField) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species,
 
       1.0, dt,
@@ -717,9 +729,9 @@ TEST_F(PlasmaSimulationTest, ReactionEvaluatorSeesCurrentElectricField) {
 
   ElectricFieldAwareEvaluator evaluator{.reaction = reaction};
 
-  PlasmaSimulation simulation(density, reactions, transport, evaluator,
+  FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
-                              FixedStepClock(dt, 1));
+                                       FixedStepClock(dt, 1));
 
   const auto result = simulation.advanceOneStep();
 
@@ -755,7 +767,7 @@ TEST_F(PlasmaSimulationTest, ReactionEvaluatorSeesCurrentElectricField) {
 // Uniform neutral plasma + zero potential remains stationary.
 // ============================================================
 
-TEST_F(PlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
+TEST_F(FixedStepPlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
   constexpr double dt = 0.01;
 
   constexpr std::size_t total_steps = 5;
@@ -772,7 +784,7 @@ TEST_F(PlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species,
 
       1.0, dt,
@@ -783,11 +795,11 @@ TEST_F(PlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
 
       std::make_unique<linalg::CholmodSolver>());
 
-  PlasmaSimulation simulation(density, reactions, transport,
+  FixedStepPlasmaSimulation simulation(density, reactions, transport,
 
-                              NoReactionEvaluator{},
+                                       NoReactionEvaluator{},
 
-                              FixedStepClock(dt, total_steps));
+                                       FixedStepClock(dt, total_steps));
 
   simulation.run();
 
@@ -818,7 +830,7 @@ TEST_F(PlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
 //     advanceTransport()
 // ============================================================
 
-TEST_F(PlasmaSimulationTest,
+TEST_F(FixedStepPlasmaSimulationTest,
        SolvesPoissonExactlyOncePerTimeStepAndReusesFactorization) {
   constexpr double dt = 0.001;
 
@@ -840,21 +852,22 @@ TEST_F(PlasmaSimulationTest,
 
   auto* counting_solver = backend.get();
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(mesh_, species,
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species,
 
-                                                        1.0, dt,
+      1.0, dt,
 
-                                                        std::move(potential_bc),
+      std::move(potential_bc),
 
-                                                        std::move(species_bc),
+      std::move(species_bc),
 
-                                                        std::move(backend));
+      std::move(backend));
 
-  PlasmaSimulation simulation(density, reactions, transport,
+  FixedStepPlasmaSimulation simulation(density, reactions, transport,
 
-                              NoReactionEvaluator{},
+                                       NoReactionEvaluator{},
 
-                              FixedStepClock(dt, total_steps));
+                                       FixedStepClock(dt, total_steps));
 
   simulation.run();
 
@@ -879,7 +892,7 @@ TEST_F(PlasmaSimulationTest,
 // Such a simulation would have no well-defined physical time.
 // ============================================================
 
-TEST_F(PlasmaSimulationTest,
+TEST_F(FixedStepPlasmaSimulationTest,
        RejectsClockTimeStepDifferentFromTransportTimeStep) {
   constexpr double transport_dt = 0.01;
 
@@ -897,7 +910,7 @@ TEST_F(PlasmaSimulationTest,
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species,
 
       1.0, transport_dt,
@@ -908,11 +921,11 @@ TEST_F(PlasmaSimulationTest,
 
       std::make_unique<linalg::CholmodSolver>());
 
-  EXPECT_THROW(PlasmaSimulation(density, reactions, transport,
+  EXPECT_THROW(FixedStepPlasmaSimulation(density, reactions, transport,
 
-                                NoReactionEvaluator{},
+                                         NoReactionEvaluator{},
 
-                                FixedStepClock(clock_dt, 10)),
+                                         FixedStepClock(clock_dt, 10)),
                std::invalid_argument);
 }
 
@@ -928,7 +941,7 @@ TEST_F(PlasmaSimulationTest,
 // already ended.
 // ============================================================
 
-TEST_F(PlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
+TEST_F(FixedStepPlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
   constexpr double dt = 0.01;
 
   physics::SpeciesSet species;
@@ -943,7 +956,7 @@ TEST_F(PlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  equation::MultiSpeciesDriftDiffusionStepper transport(
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species,
 
       1.0, dt,
@@ -954,17 +967,60 @@ TEST_F(PlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
 
       std::make_unique<linalg::CholmodSolver>());
 
-  PlasmaSimulation simulation(density, reactions, transport,
+  FixedStepPlasmaSimulation simulation(density, reactions, transport,
 
-                              NoReactionEvaluator{},
+                                       NoReactionEvaluator{},
 
-                              FixedStepClock(dt, 1));
+                                       FixedStepClock(dt, 1));
 
   ASSERT_TRUE(simulation.advanceOneStep().success());
 
   ASSERT_TRUE(simulation.finished());
 
-  EXPECT_THROW(simulation.advanceOneStep(), std::out_of_range);
+  EXPECT_THROW((void)simulation.advanceOneStep(), std::out_of_range);
+}
+
+TEST(AdaptiveTimeClockTest, LandsExactlyOnEndTime) {
+  AdaptiveTimeClock clock(0.1);
+
+  clock.advance(0.04);
+  clock.advance(0.04);
+  clock.advance(0.02);
+
+  EXPECT_TRUE(clock.finished());
+  EXPECT_EQ(clock.step(), 3u);
+  EXPECT_NEAR(clock.time(), 0.1, 1e-15);
+  EXPECT_NEAR(clock.remainingTime(), 0.0, 1e-15);
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       RunSelectsVariableStepsAndReachesEndTime) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          NoReactionEvaluator{},
+                                          AdaptiveTimeClock(0.1));
+
+  simulation.run();
+
+  EXPECT_TRUE(simulation.finished());
+  EXPECT_EQ(simulation.step(), 3u);
+  EXPECT_NEAR(simulation.time(), 0.1, 1e-15);
+  EXPECT_NEAR(simulation.lastTimeStep(), 0.02, 1e-14);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(density[ids.electron][cell], 1.0, 1e-12);
+    EXPECT_NEAR(density[ids.ion][cell], 1.0, 1e-12);
+  }
 }
 
 }  // namespace pemu::simulation::test

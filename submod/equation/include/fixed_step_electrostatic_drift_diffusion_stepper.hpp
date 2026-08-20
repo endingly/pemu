@@ -6,7 +6,7 @@
 #include <pemu/discretization/operators/electric_field.hpp>
 #include <pemu/discretization/poisson_fvm.hpp>
 
-#include <pemu/equation/explicit_species_continuity_stepper.hpp>
+#include <pemu/equation/fixed_step_explicit_species_continuity_stepper.hpp>
 #include <pemu/equation/poisson_solver.hpp>
 
 #include <pemu/field/cell_field.hpp>
@@ -66,9 +66,9 @@ namespace pemu::equation {
  * Call updateElectrostatics() again if synchronized k+1
  * electrostatic fields are required.
  */
-class ElectrostaticDriftDiffusionStepper {
+class FixedStepElectrostaticDriftDiffusionStepper {
  public:
-  ElectrostaticDriftDiffusionStepper(
+  FixedStepElectrostaticDriftDiffusionStepper(
       const mesh::IMesh& mesh, double permittivity, double dt,
       physics::ChargedSpeciesTransport electron,
       physics::ChargedSpeciesTransport ion,
@@ -107,17 +107,17 @@ class ElectrostaticDriftDiffusionStepper {
     validateConfiguration(dt);
   }
 
-  ElectrostaticDriftDiffusionStepper(
-      const ElectrostaticDriftDiffusionStepper&) = delete;
+  FixedStepElectrostaticDriftDiffusionStepper(
+      const FixedStepElectrostaticDriftDiffusionStepper&) = delete;
 
-  ElectrostaticDriftDiffusionStepper& operator=(
-      const ElectrostaticDriftDiffusionStepper&) = delete;
+  FixedStepElectrostaticDriftDiffusionStepper& operator=(
+      const FixedStepElectrostaticDriftDiffusionStepper&) = delete;
 
-  ElectrostaticDriftDiffusionStepper(ElectrostaticDriftDiffusionStepper&&) =
-      delete;
+  FixedStepElectrostaticDriftDiffusionStepper(
+      FixedStepElectrostaticDriftDiffusionStepper&&) = delete;
 
-  ElectrostaticDriftDiffusionStepper& operator=(
-      ElectrostaticDriftDiffusionStepper&&) = delete;
+  FixedStepElectrostaticDriftDiffusionStepper& operator=(
+      FixedStepElectrostaticDriftDiffusionStepper&&) = delete;
 
   // ========================================================
   // Electrostatic update
@@ -534,7 +534,7 @@ class ElectrostaticDriftDiffusionStepper {
   // Species drift workspace
   //
   // These objects are intentionally stable in memory because
-  // ExplicitSpeciesContinuityStepper stores references to
+  // FixedStepExplicitSpeciesContinuityStepper stores references to
   // them.
   // ========================================================
 
@@ -556,9 +556,9 @@ class ElectrostaticDriftDiffusionStepper {
 
   PoissonSolver poisson_solver_;
 
-  ExplicitSpeciesContinuityStepper electron_stepper_;
+  FixedStepExplicitSpeciesContinuityStepper electron_stepper_;
 
-  ExplicitSpeciesContinuityStepper ion_stepper_;
+  FixedStepExplicitSpeciesContinuityStepper ion_stepper_;
 };
 
 }  // namespace pemu::equation

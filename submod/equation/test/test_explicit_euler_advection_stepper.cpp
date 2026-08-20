@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <filesystem>
-#include <pemu/equation/explicit_euler_advection_stepper.hpp>
+#include <pemu/equation/fixed_step_explicit_euler_advection_stepper.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
 namespace pemu::equation::test {
@@ -11,9 +11,10 @@ std::filesystem::path testMeshPath() {
   return std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} / "two_quads.msh";
 }
 
-class AdvectionStepperTest : public ::testing::Test {
+class FixedStepExplicitEulerAdvectionStepperTest : public ::testing::Test {
  protected:
-  AdvectionStepperTest() : mesh_(testMeshPath().string()) {}
+  FixedStepExplicitEulerAdvectionStepperTest()
+      : mesh_(testMeshPath().string()) {}
 
   mesh::MoabMesh mesh_;
 };
@@ -30,7 +31,7 @@ mesh::FaceId findInternalFace(const mesh::IMesh& mesh) {
 
 };  // namespace
 
-TEST_F(AdvectionStepperTest, ComputesExpectedCfl) {
+TEST_F(FixedStepExplicitEulerAdvectionStepperTest, ComputesExpectedCfl) {
   field::FaceField<double> velocity(mesh_, 0.0);
 
   const auto face = findInternalFace(mesh_);
@@ -39,12 +40,13 @@ TEST_F(AdvectionStepperTest, ComputesExpectedCfl) {
 
   boundary::BoundaryConditionSet bc;
 
-  equation::ExplicitEulerAdvectionStepper stepper(mesh_, velocity, 0.25, bc);
+  equation::FixedStepExplicitEulerAdvectionStepper stepper(mesh_, velocity,
+                                                           0.25, bc);
 
   EXPECT_NEAR(stepper.maxCfl(), 0.5, 1e-12);
 }
 
-TEST_F(AdvectionStepperTest, RejectsCflGreaterThanOne) {
+TEST_F(FixedStepExplicitEulerAdvectionStepperTest, RejectsCflGreaterThanOne) {
   field::CellField<double> u(mesh_, 1.0);
 
   field::FaceField<double> velocity(mesh_, 0.0);
@@ -55,14 +57,16 @@ TEST_F(AdvectionStepperTest, RejectsCflGreaterThanOne) {
 
   boundary::BoundaryConditionSet bc;
 
-  equation::ExplicitEulerAdvectionStepper stepper(mesh_, velocity, 0.75, bc);
+  equation::FixedStepExplicitEulerAdvectionStepper stepper(mesh_, velocity,
+                                                           0.75, bc);
 
   EXPECT_GT(stepper.maxCfl(), 1.0);
 
   EXPECT_THROW(stepper.step(u), std::runtime_error);
 }
 
-TEST_F(AdvectionStepperTest, CflOneMovesStateAcrossInternalFace) {
+TEST_F(FixedStepExplicitEulerAdvectionStepperTest,
+       CflOneMovesStateAcrossInternalFace) {
   field::CellField<double> u(mesh_, 0.0);
 
   field::FaceField<double> velocity(mesh_, 0.0);
@@ -81,7 +85,8 @@ TEST_F(AdvectionStepperTest, CflOneMovesStateAcrossInternalFace) {
 
   boundary::BoundaryConditionSet bc;
 
-  equation::ExplicitEulerAdvectionStepper stepper(mesh_, velocity, 1.0, bc);
+  equation::FixedStepExplicitEulerAdvectionStepper stepper(mesh_, velocity, 1.0,
+                                                           bc);
 
   ASSERT_NEAR(stepper.maxCfl(), 1.0, 1e-12);
 

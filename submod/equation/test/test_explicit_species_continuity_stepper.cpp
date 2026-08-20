@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <filesystem>
-#include <pemu/equation/explicit_species_continuity_stepper.hpp>
+#include <pemu/equation/fixed_step_explicit_species_continuity_stepper.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
 namespace pemu::equation::test {
@@ -11,9 +11,10 @@ std::filesystem::path testMeshPath() {
   return std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} / "two_quads.msh";
 }
 
-class SpeciesContinuityTest : public ::testing::Test {
+class FixedStepExplicitSpeciesContinuityStepperTest : public ::testing::Test {
  protected:
-  SpeciesContinuityTest() : mesh_(testMeshPath().string()) {}
+  FixedStepExplicitSpeciesContinuityStepperTest()
+      : mesh_(testMeshPath().string()) {}
 
   mesh::MoabMesh mesh_;
 };
@@ -32,7 +33,8 @@ double totalParticles(const mesh::IMesh& mesh,
 
 };  // namespace
 
-TEST_F(SpeciesContinuityTest, ConstantDensityRemainsConstant) {
+TEST_F(FixedStepExplicitSpeciesContinuityStepperTest,
+       ConstantDensityRemainsConstant) {
   constexpr double density_value = 3.0;
 
   field::CellField<double> density(mesh_, density_value);
@@ -51,8 +53,8 @@ TEST_F(SpeciesContinuityTest, ConstantDensityRemainsConstant) {
 
   bc.setDirichlet(mesh::BoundaryId{4}, density_value);
 
-  equation::ExplicitSpeciesContinuityStepper stepper(mesh_, velocity, 1.0, 0.01,
-                                                     bc);
+  equation::FixedStepExplicitSpeciesContinuityStepper stepper(mesh_, velocity,
+                                                              1.0, 0.01, bc);
 
   if (stepper.maxTransportCfl() > 1.0) {
     throw std::runtime_error(
@@ -68,7 +70,7 @@ TEST_F(SpeciesContinuityTest, ConstantDensityRemainsConstant) {
   }
 }
 
-TEST_F(SpeciesContinuityTest, SourceIncreasesDensity) {
+TEST_F(FixedStepExplicitSpeciesContinuityStepperTest, SourceIncreasesDensity) {
   field::CellField<double> density(mesh_, 1.0);
 
   field::CellField<double> source(mesh_, 2.0);
@@ -82,8 +84,8 @@ TEST_F(SpeciesContinuityTest, SourceIncreasesDensity) {
   bc.setDirichlet(3, 1.0);
   bc.setDirichlet(4, 1.0);
 
-  equation::ExplicitSpeciesContinuityStepper stepper(mesh_, velocity, 1.0, 0.1,
-                                                     bc);
+  equation::FixedStepExplicitSpeciesContinuityStepper stepper(mesh_, velocity,
+                                                              1.0, 0.1, bc);
 
   if (stepper.maxTransportCfl() > 1.0) {
     throw std::runtime_error(
@@ -98,7 +100,8 @@ TEST_F(SpeciesContinuityTest, SourceIncreasesDensity) {
   }
 }
 
-TEST_F(SpeciesContinuityTest, SourceChangesTotalParticlesByIntegratedSource) {
+TEST_F(FixedStepExplicitSpeciesContinuityStepperTest,
+       SourceChangesTotalParticlesByIntegratedSource) {
   field::CellField<double> density(mesh_, 1.0);
 
   field::CellField<double> source(mesh_, 2.0);
@@ -114,8 +117,8 @@ TEST_F(SpeciesContinuityTest, SourceChangesTotalParticlesByIntegratedSource) {
 
   constexpr double dt = 0.1;
 
-  equation::ExplicitSpeciesContinuityStepper stepper(mesh_, velocity, 1.0, dt,
-                                                     bc);
+  equation::FixedStepExplicitSpeciesContinuityStepper stepper(mesh_, velocity,
+                                                              1.0, dt, bc);
 
   const double before = totalParticles(mesh_, density);
 

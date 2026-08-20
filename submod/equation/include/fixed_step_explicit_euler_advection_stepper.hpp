@@ -11,12 +11,11 @@
 
 namespace pemu::equation {
 
-class ExplicitEulerAdvectionStepper {
+class FixedStepExplicitEulerAdvectionStepper {
  public:
-  ExplicitEulerAdvectionStepper(const mesh::IMesh& mesh,
-                                const field::FaceField<double>& normal_velocity,
-                                double dt,
-                                const boundary::BoundaryConditionSet& bc)
+  FixedStepExplicitEulerAdvectionStepper(
+      const mesh::IMesh& mesh, const field::FaceField<double>& normal_velocity,
+      double dt, const boundary::BoundaryConditionSet& bc)
       : mesh_(&mesh),
         normal_velocity_(&normal_velocity),
         bc_(&bc),

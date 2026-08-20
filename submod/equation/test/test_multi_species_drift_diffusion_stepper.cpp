@@ -1,7 +1,8 @@
 #include <gtest/gtest.h>
 #include <pemu/boundary/boundary_condition_set.hpp>
-#include <pemu/equation/electrostatic_drift_diffusion_stepper.hpp>
-#include <pemu/equation/multi_species_drift_diffusion_stepper.hpp>
+#include <pemu/equation/adaptive_step_multi_species_drift_diffusion_stepper.hpp>
+#include <pemu/equation/fixed_step_electrostatic_drift_diffusion_stepper.hpp>
+#include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/linalg/cholmod_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
@@ -187,9 +188,19 @@ ElectronIonIds addElectronAndIon(physics::SpeciesSet& species,
 // Fixture
 // ============================================================
 
-class MultiSpeciesDriftDiffusionTest : public ::testing::Test {
+class FixedStepMultiSpeciesDriftDiffusionStepperTest : public ::testing::Test {
  protected:
-  MultiSpeciesDriftDiffusionTest() : mesh_(twoQuadsMeshPath()) {}
+  FixedStepMultiSpeciesDriftDiffusionStepperTest()
+      : mesh_(twoQuadsMeshPath()) {}
+
+  mesh::MoabMesh mesh_;
+};
+
+class AdaptiveStepMultiSpeciesDriftDiffusionStepperTest
+    : public ::testing::Test {
+ protected:
+  AdaptiveStepMultiSpeciesDriftDiffusionStepperTest()
+      : mesh_(twoQuadsMeshPath()) {}
 
   mesh::MoabMesh mesh_;
 };
@@ -210,7 +221,8 @@ class MultiSpeciesDriftDiffusionTest : public ::testing::Test {
 //    constant density -> zero SG flux.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest, UniformNeutralPlasmaRemainsStationary) {
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       UniformNeutralPlasmaRemainsStationary) {
   constexpr double density_value = 3.0;
 
   // --------------------------------------------------------
@@ -246,7 +258,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, UniformNeutralPlasmaRemainsStationary) {
   // Solver
   // --------------------------------------------------------
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0,   // epsilon
@@ -318,7 +330,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, UniformNeutralPlasmaRemainsStationary) {
 //    and deliberately does not exercise transport.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest,
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
        ChargeDensitySupportsMoreThanTwoSpecies) {
   physics::SpeciesSet species;
 
@@ -355,7 +367,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 
   std::vector<boundary::BoundaryConditionSet> species_bc(species.size());
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, 0.01,
@@ -387,7 +399,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 //
 //    means:
 //
-//        MultiSpeciesDriftDiffusionStepper does not update
+//        FixedStepMultiSpeciesDriftDiffusionStepper does not update
 //        the species at all.
 //
 //    Even a non-zero source passed for that species is ignored
@@ -396,7 +408,8 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 //    Chemistry-only evolution can be introduced separately.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest, ImmobileSpeciesIsNotUpdated) {
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       ImmobileSpeciesIsNotUpdated) {
   physics::SpeciesSet species;
 
   const auto ids = addElectronAndIon(species);
@@ -427,7 +440,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, ImmobileSpeciesIsNotUpdated) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 3.0);
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, 0.01,
@@ -479,7 +492,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, ImmobileSpeciesIsNotUpdated) {
 //        v_i,n = -1 n_x
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest,
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
        AppliedPotentialProducesCorrectDriftForAllChargedSpecies) {
   physics::SpeciesSet species;
 
@@ -496,7 +509,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, 0.001,
@@ -578,7 +591,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 //    transport response.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest,
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
        ComputesDriftForThreeTransportedChargedSpecies) {
   physics::SpeciesSet species;
 
@@ -620,7 +633,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, 0.001,
@@ -667,7 +680,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 //    A deliberately huge dt is used here.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest,
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
        CflFailureDoesNotPartiallyUpdateSpecies) {
   physics::SpeciesSet species;
 
@@ -696,7 +709,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
   //
   constexpr double dt = 100.0;
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, dt,
@@ -711,7 +724,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 
   const auto ion_before = snapshot(density[ids.ion]);
 
-  EXPECT_THROW(stepper.step(density, source), std::runtime_error);
+  EXPECT_THROW(auto _ = stepper.step(density, source), std::runtime_error);
 
   // --------------------------------------------------------
   // Neither species may have been modified.
@@ -730,7 +743,8 @@ TEST_F(MultiSpeciesDriftDiffusionTest,
 //    fields indexed by another species layout are not legal.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest, RejectsWrongSpeciesFieldCount) {
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       RejectsWrongSpeciesFieldCount) {
   physics::SpeciesSet species;
 
   auto _ = addElectronAndIon(species);
@@ -739,7 +753,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, RejectsWrongSpeciesFieldCount) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, 0.01,
@@ -757,7 +771,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, RejectsWrongSpeciesFieldCount) {
   //
   physics::SpeciesCellFields wrong_density(mesh_, 3, 1.0);
 
-  EXPECT_THROW(stepper.updateElectrostatics(wrong_density),
+  EXPECT_THROW(auto _ = stepper.updateElectrostatics(wrong_density),
                std::invalid_argument);
 }
 
@@ -770,7 +784,8 @@ TEST_F(MultiSpeciesDriftDiffusionTest, RejectsWrongSpeciesFieldCount) {
 //        &fields.mesh() == solver.mesh
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest, RejectsFieldsFromDifferentMesh) {
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       RejectsFieldsFromDifferentMesh) {
   physics::SpeciesSet species;
 
   auto _ = addElectronAndIon(species);
@@ -779,7 +794,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, RejectsFieldsFromDifferentMesh) {
 
   auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  MultiSpeciesDriftDiffusionStepper stepper(
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
       mesh_, species,
 
       1.0, 0.01,
@@ -794,7 +809,8 @@ TEST_F(MultiSpeciesDriftDiffusionTest, RejectsFieldsFromDifferentMesh) {
 
   physics::SpeciesCellFields density(other_mesh, species.size(), 1.0);
 
-  EXPECT_THROW(stepper.updateElectrostatics(density), std::invalid_argument);
+  EXPECT_THROW(auto _ = stepper.updateElectrostatics(density),
+               std::invalid_argument);
 }
 
 // ============================================================
@@ -809,12 +825,13 @@ TEST_F(MultiSpeciesDriftDiffusionTest, RejectsFieldsFromDifferentMesh) {
 //    This test assumes the old interfaces are still:
 //
 //      ChargedSpeciesTransport
-//      ElectrostaticDriftDiffusionStepper
+//      FixedStepElectrostaticDriftDiffusionStepper
 //
 //    as implemented in the previous stage.
 // ============================================================
 
-TEST_F(MultiSpeciesDriftDiffusionTest, MatchesLegacyTwoSpeciesSolver) {
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       MatchesLegacyTwoSpeciesSolver) {
   constexpr double dt = 1e-3;
 
   constexpr double epsilon = 1.0;
@@ -870,7 +887,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, MatchesLegacyTwoSpeciesSolver) {
   physics::ChargedSpeciesTransport old_ion{
       .charge = +1.0, .mobility = 1.0, .diffusivity = 0.1};
 
-  ElectrostaticDriftDiffusionStepper old_solver(
+  FixedStepElectrostaticDriftDiffusionStepper old_solver(
       mesh_, epsilon, dt,
 
       old_electron, old_ion,
@@ -908,7 +925,7 @@ TEST_F(MultiSpeciesDriftDiffusionTest, MatchesLegacyTwoSpeciesSolver) {
   auto new_species_bc =
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0);
 
-  MultiSpeciesDriftDiffusionStepper new_solver(
+  FixedStepMultiSpeciesDriftDiffusionStepper new_solver(
       mesh_, species,
 
       epsilon, dt,
@@ -989,6 +1006,46 @@ TEST_F(MultiSpeciesDriftDiffusionTest, MatchesLegacyTwoSpeciesSolver) {
 
                 1e-12);
   }
+}
+
+TEST_F(AdaptiveStepMultiSpeciesDriftDiffusionStepperTest,
+       UsesConfiguredMaximumTimeStep) {
+  physics::SpeciesSet species;
+  auto _ = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::SpeciesCellFields source(mesh_, species.size(), 0.0);
+
+  AdaptiveStepMultiSpeciesDriftDiffusionStepper stepper(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.02, .max_growth = 2.0});
+
+  ASSERT_TRUE(stepper.prepareElectrostatics(density).success());
+  const auto proposal = stepper.advancePrepared(density, source, 0.1);
+
+  EXPECT_NEAR(proposal.dt, 0.02, 1e-14);
+  EXPECT_NEAR(stepper.previousTimeStep(), 0.02, 1e-14);
+  EXPECT_TRUE(stepper.hasLastTimeStepProposal());
+}
+
+TEST_F(AdaptiveStepMultiSpeciesDriftDiffusionStepperTest,
+       FinalTimeStepEqualsRemainingTime) {
+  physics::SpeciesSet species;
+  auto _ = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::SpeciesCellFields source(mesh_, species.size(), 0.0);
+
+  AdaptiveStepMultiSpeciesDriftDiffusionStepper stepper(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.02, .max_growth = 2.0});
+
+  ASSERT_TRUE(stepper.prepareElectrostatics(density).success());
+  const auto proposal = stepper.advancePrepared(density, source, 0.005);
+
+  EXPECT_NEAR(proposal.dt, 0.005, 1e-14);
 }
 
 }  // namespace pemu::equation::test

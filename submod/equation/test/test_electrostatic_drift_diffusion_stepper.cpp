@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <pemu/boundary/boundary_condition_set.hpp>
-#include <pemu/equation/electrostatic_drift_diffusion_stepper.hpp>
+#include <pemu/equation/fixed_step_electrostatic_drift_diffusion_stepper.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/linalg/cholmod_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
@@ -52,9 +52,10 @@ mesh::FaceId findBoundaryFace(const mesh::IMesh& mesh,
 // Test fixture
 // ============================================================
 
-class ElectrostaticDriftDiffusionTest : public ::testing::Test {
+class FixedStepElectrostaticDriftDiffusionStepperTest : public ::testing::Test {
  protected:
-  ElectrostaticDriftDiffusionTest() : mesh_(testMeshPath().string()) {}
+  FixedStepElectrostaticDriftDiffusionStepperTest()
+      : mesh_(testMeshPath().string()) {}
 
   // --------------------------------------------------------
   // phi = 0 on every boundary.
@@ -124,9 +125,11 @@ class ElectrostaticDriftDiffusionTest : public ::testing::Test {
   mesh::MoabMesh mesh_;
 };
 
-class ElectrostaticDriftDiffusionReactionTest : public ::testing::Test {
+class FixedStepElectrostaticDriftDiffusionReactionTest
+    : public ::testing::Test {
  protected:
-  ElectrostaticDriftDiffusionReactionTest() : mesh_(testMeshPath().string()) {}
+  FixedStepElectrostaticDriftDiffusionReactionTest()
+      : mesh_(testMeshPath().string()) {}
   static constexpr double kTolerance = 1e-12;
   mesh::MoabMesh mesh_;
 };
@@ -168,7 +171,8 @@ double totalParticles(const mesh::IMesh& mesh,
 // stationary.
 // ============================================================
 
-TEST_F(ElectrostaticDriftDiffusionTest, UniformNeutralPlasmaRemainsStationary) {
+TEST_F(FixedStepElectrostaticDriftDiffusionStepperTest,
+       UniformNeutralPlasmaRemainsStationary) {
   constexpr double density_value = 3.0;
 
   constexpr double epsilon = 1.0;
@@ -195,7 +199,7 @@ TEST_F(ElectrostaticDriftDiffusionTest, UniformNeutralPlasmaRemainsStationary) {
   physics::ChargedSpeciesTransport ion{
       .charge = +1.0, .mobility = 0.5, .diffusivity = 0.1};
 
-  equation::ElectrostaticDriftDiffusionStepper stepper(
+  equation::FixedStepElectrostaticDriftDiffusionStepper stepper(
       mesh_, epsilon, dt, electron, ion, potential_bc, electron_bc, ion_bc,
       std::make_unique<linalg::CholmodSolver>());
 
@@ -251,7 +255,7 @@ TEST_F(ElectrostaticDriftDiffusionTest, UniformNeutralPlasmaRemainsStationary) {
 // This test only updates electrostatics.
 // ============================================================
 
-TEST_F(ElectrostaticDriftDiffusionTest,
+TEST_F(FixedStepElectrostaticDriftDiffusionStepperTest,
        AppliedPotentialProducesOppositeSpeciesDrift) {
   constexpr double density_value = 1.0;
 
@@ -275,7 +279,7 @@ TEST_F(ElectrostaticDriftDiffusionTest,
   physics::ChargedSpeciesTransport ion{
       .charge = +1.0, .mobility = 1.0, .diffusivity = 0.1};
 
-  equation::ElectrostaticDriftDiffusionStepper stepper(
+  equation::FixedStepElectrostaticDriftDiffusionStepper stepper(
       mesh_, epsilon, dt, electron, ion, potential_bc, electron_bc, ion_bc,
       std::make_unique<linalg::CholmodSolver>());
 
@@ -338,7 +342,7 @@ TEST_F(ElectrostaticDriftDiffusionTest,
 // field may change.
 // ============================================================
 
-TEST_F(ElectrostaticDriftDiffusionTest,
+TEST_F(FixedStepElectrostaticDriftDiffusionStepperTest,
        CflFailureDoesNotPartiallyAdvanceSpecies) {
   constexpr double epsilon = 1.0;
 
@@ -409,7 +413,7 @@ TEST_F(ElectrostaticDriftDiffusionTest,
   // THIS was the missing object in the previous answer.
   // ========================================================
 
-  equation::ElectrostaticDriftDiffusionStepper stepper(
+  equation::FixedStepElectrostaticDriftDiffusionStepper stepper(
       mesh_, epsilon, dt, electron, ion, potential_bc, electron_bc, ion_bc,
       std::make_unique<linalg::CholmodSolver>());
 
@@ -461,7 +465,8 @@ TEST_F(ElectrostaticDriftDiffusionTest,
 //     ion charge      > 0
 // ============================================================
 
-TEST_F(ElectrostaticDriftDiffusionTest, RejectsInvalidSpeciesChargePolarity) {
+TEST_F(FixedStepElectrostaticDriftDiffusionStepperTest,
+       RejectsInvalidSpeciesChargePolarity) {
   constexpr double epsilon = 1.0;
 
   constexpr double dt = 0.01;
@@ -479,7 +484,7 @@ TEST_F(ElectrostaticDriftDiffusionTest, RejectsInvalidSpeciesChargePolarity) {
       .charge = +1.0, .mobility = 1.0, .diffusivity = 0.1};
 
   EXPECT_THROW(
-      equation::ElectrostaticDriftDiffusionStepper(
+      equation::FixedStepElectrostaticDriftDiffusionStepper(
           mesh_, epsilon, dt, invalid_electron, ion, potential_bc, electron_bc,
           ion_bc, std::make_unique<linalg::CholmodSolver>()),
       std::invalid_argument);
@@ -524,7 +529,7 @@ TEST_F(ElectrostaticDriftDiffusionTest, RejectsInvalidSpeciesChargePolarity) {
 // both before and after the reaction step.
 // ============================================================
 
-TEST_F(ElectrostaticDriftDiffusionReactionTest,
+TEST_F(FixedStepElectrostaticDriftDiffusionReactionTest,
        IonizationProducesNeutralElectronIonPairs) {
   // ========================================================
   // Physical / numerical parameters
@@ -697,7 +702,7 @@ TEST_F(ElectrostaticDriftDiffusionReactionTest,
   // Construct coupled electrostatic drift-diffusion stepper
   // ========================================================
 
-  equation::ElectrostaticDriftDiffusionStepper stepper(
+  equation::FixedStepElectrostaticDriftDiffusionStepper stepper(
       mesh_, permittivity, dt, electron, ion, potential_bc, electron_bc, ion_bc,
       std::make_unique<linalg::CholmodSolver>());
 

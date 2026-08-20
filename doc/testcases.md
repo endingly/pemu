@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 91 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 152 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -142,3 +142,73 @@
 | `MatrixIsSymmetric` | 五点拉普拉斯矩阵严格对称。 |
 | `MatrixCanBeCholeskyFactorized` | 该 Dirichlet 离散矩阵为可 CHOLMOD 分解的 SPD 矩阵。 |
 | `HasExpectedSparsityPattern` | `n×n` 内点的非零元数为 `5n²-4n`。 |
+
+## 电场与带电粒子漂移（`submod/discretization/test/test_electric_field.cpp` 等）
+
+| 用例 | 保证 |
+| --- | --- |
+| `DriftVelocityTest.PositiveSpeciesDriftsAlongElectricField` | 正电荷漂移速度与电场同向。 |
+| `DriftVelocityTest.NegativeSpeciesDriftsAgainstElectricField` | 负电荷漂移速度与电场反向。 |
+| `ElectrostaticDriftTest.PotentialProducesOppositeIonAndElectronDrift` | 同一电势梯度使电子与正离子产生相反漂移。 |
+| `ElectricFieldTest.LinearPotentialProducesExactNormalElectricField` | 线性电势的离散面法向电场与解析值一致。 |
+
+## 物理模型（`submod/physics/test`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `ChargeDensityTest.EqualOppositeSpeciesAreNeutral` | 等密度、等电荷量异号的两种粒子产生零净电荷密度。 |
+| `ReactionTest.ElectronImpactIonizationComputesExpectedRate` | 电子碰撞电离率按给定电子密度、中性粒子密度和速率系数计算。 |
+| `ReactionTest.ZeroElectronDensityProducesNoIonization` | 没有电子时电子碰撞电离率严格为零。 |
+| `ReactionTest.IonizationCreatesElectronIonPairs` | 一次电离同时产生一个电子和一个正离子。 |
+| `ReactionTest.PairProductionAccumulatesIntoExistingSource` | 反应源项累加而非覆盖已有源项。 |
+| `ReactionTest.PairProductionCreatesNoNetCharge` | 成对产生电子和离子不会凭空产生净电荷。 |
+| `ReactionNetworkTest.PairIonizationConservesCharge` | 反应网络能识别成对电离的电荷守恒。 |
+| `ReactionNetworkTest.DetectsChargeViolatingReaction` | 违反电荷守恒的化学计量关系会被检测。 |
+| `ReactionNetworkTest.AccumulatesStoichiometricSources` | 反应率依据化学计量数正确转换为各物种源项。 |
+| `ReactionNetworkTest.MultipleReactionsAccumulateCorrectly` | 多个反应对同一物种的贡献正确求和。 |
+| `SpeciesSetTest.AssignsDenseStableIds` | 物种 ID 稠密、稳定并可用于场数组索引。 |
+| `SpeciesFieldsTest.StoresIndependentFieldsPerSpecies` | 每个物种拥有互不串扰的独立场。 |
+
+## 固定步长与自适应步长方程推进器（`submod/equation/test`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `FixedStepElectrostaticDriftDiffusionStepperTest.UniformNeutralPlasmaRemainsStationary` | 固定步长下，均匀电中性等离子体是静止离散解。 |
+| `FixedStepElectrostaticDriftDiffusionStepperTest.AppliedPotentialProducesOppositeSpeciesDrift` | 外加电势使电子与离子按电荷极性反向漂移。 |
+| `FixedStepElectrostaticDriftDiffusionStepperTest.CflFailureDoesNotPartiallyAdvanceSpecies` | 任一物种违反 CFL 时，所有物种都保持更新前状态。 |
+| `FixedStepElectrostaticDriftDiffusionStepperTest.RejectsInvalidSpeciesChargePolarity` | 电子、离子的电荷极性配置错误会在构造时被拒绝。 |
+| `FixedStepElectrostaticDriftDiffusionReactionTest.IonizationProducesNeutralElectronIonPairs` | 固定步长漂移扩散与电离耦合后仍成对产生电子、离子并保持电中性。 |
+| `FixedStepExplicitEulerAdvectionStepperTest.ComputesExpectedCfl` | 固定步长迎风推进器给出与网格、速度和步长一致的 CFL 数。 |
+| `FixedStepExplicitEulerAdvectionStepperTest.RejectsCflGreaterThanOne` | 显式迎风 CFL 大于 1 时拒绝推进。 |
+| `FixedStepExplicitEulerAdvectionStepperTest.CflOneMovesStateAcrossInternalFace` | CFL 等于 1 时，状态恰好跨过内面且总量守恒。 |
+| `FixedStepExplicitSpeciesContinuityStepperTest.ConstantDensityRemainsConstant` | 与边界相容的常密度在固定步长 SG 输运下不变。 |
+| `FixedStepExplicitSpeciesContinuityStepperTest.SourceIncreasesDensity` | 常源项按照 $n^{k+1}=n^k+\Delta tS$ 增加密度。 |
+| `FixedStepExplicitSpeciesContinuityStepperTest.SourceChangesTotalParticlesByIntegratedSource` | 总粒子数变化等于 $\Delta t$ 乘体积积分源项。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.UniformNeutralPlasmaRemainsStationary` | 固定多物种推进器保持均匀中性状态。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.ChargeDensitySupportsMoreThanTwoSpecies` | 电荷密度对任意数量物种按 $\rho=\sum_s q_sn_s$ 求和。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.ImmobileSpeciesIsNotUpdated` | 标为 immobile 的物种不参与输运更新。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.AppliedPotentialProducesCorrectDriftForAllChargedSpecies` | 每个带电物种按迁移率和极性得到正确漂移速度。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.ComputesDriftForThreeTransportedChargedSpecies` | 漂移计算不隐含“只有电子和一种离子”的限制。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.CflFailureDoesNotPartiallyUpdateSpecies` | 多物种 CFL 预检具有原子性，不留下半更新状态。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsWrongSpeciesFieldCount` | 场数组物种数必须与 `SpeciesSet` 一致。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsFieldsFromDifferentMesh` | 多物种场不能跨网格传给推进器。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.MatchesLegacyTwoSpeciesSolver` | 更一般的固定多物种实现与固定双物种实现给出相同结果。 |
+| `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.UsesConfiguredMaximumTimeStep` | 稳定性允许更大步长时，自适应推进器仍服从用户给定的 `max_dt`。 |
+| `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.FinalTimeStepEqualsRemainingTime` | 最后一步被截断为剩余时间，避免越过终止时刻。 |
+
+## 固定步长与自适应步长仿真（`submod/simulation/test/test_simulation.cpp`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `FixedStepClockTest.AdvancesTimeFromStepIndex` | 固定时钟满足 $t=k\Delta t$，并在指定步数后结束。 |
+| `FixedStepClockTest.RejectsNonPositiveTimeStep` | 固定时钟拒绝零或负步长。 |
+| `FixedStepClockTest.RejectsAdvanceAfterCompletion` | 已结束的固定时钟不能继续推进。 |
+| `FixedStepPlasmaSimulationTest.AdvanceOneStepEvaluatesReactionAndUpdatesSpecies` | 单步依次完成电场、反应源和固定步长输运更新。 |
+| `FixedStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一步反应率都读取最新密度，而非复用旧值。 |
+| `FixedStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 反应模型读取的是本步泊松求解得到的电场。 |
+| `FixedStepPlasmaSimulationTest.RunAdvancesUntilClockIsFinished` | `run()` 严格运行到固定时钟指定的总步数。 |
+| `FixedStepPlasmaSimulationTest.SolvesPoissonExactlyOncePerTimeStepAndReusesFactorization` | 每步只解一次泊松方程，且固定矩阵复用分析和分解。 |
+| `FixedStepPlasmaSimulationTest.RejectsClockTimeStepDifferentFromTransportTimeStep` | 仿真时钟与输运推进器的 $\Delta t$ 必须一致。 |
+| `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
+| `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
+| `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
