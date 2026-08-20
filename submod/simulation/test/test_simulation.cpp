@@ -38,6 +38,45 @@ std::filesystem::path twoQuadsMeshPath() {
 }
 
 [[nodiscard]]
+std::filesystem::path poisson64x64MeshPath() {
+  return std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} / "poisson_64x64.msh";
+}
+
+[[nodiscard]]
+double integratedDensity(const mesh::IMesh& mesh,
+                         const field::CellField<double>& density) {
+  double total = 0.0;
+
+  for (mesh::CellId cell = 0; cell < mesh.numCells(); ++cell) {
+    total += density[cell] * mesh.cellVolume(cell);
+  }
+
+  return total;
+}
+
+[[nodiscard]]
+double densityCentroidX(const mesh::IMesh& mesh,
+                        const field::CellField<double>& density) {
+  double total_density = 0.0;
+  double first_moment = 0.0;
+
+  for (mesh::CellId cell = 0; cell < mesh.numCells(); ++cell) {
+    const double weighted_density = density[cell] * mesh.cellVolume(cell);
+
+    total_density += weighted_density;
+
+    first_moment += weighted_density * mesh.cellCenter(cell).x;
+  }
+
+  if (total_density <= 0.0) {
+    throw std::runtime_error(
+        "density centroid requires positive total density");
+  }
+
+  return first_moment / total_density;
+}
+
+[[nodiscard]]
 mesh::FaceId findBoundaryFace(const mesh::IMesh& mesh,
                               mesh::BoundaryId boundary_id) {
   for (mesh::FaceId face = 0; face < mesh.numFaces(); ++face) {
@@ -104,6 +143,23 @@ boundary::BoundaryConditionSet makeLinearXPotentialBoundaryConditions(
 
   bc.setDirichlet(mesh::BoundaryId{2}, mesh.faceCenter(right_face).x);
 
+  bc.setNeumann(mesh::BoundaryId{3}, 0.0);
+
+  bc.setNeumann(mesh::BoundaryId{4}, 0.0);
+
+  return bc;
+}
+
+[[nodiscard]]
+boundary::BoundaryConditionSet makeParallelPlatePotentialBoundaryConditions(
+    double left_voltage, double right_voltage) {
+  boundary::BoundaryConditionSet bc;
+
+  bc.setDirichlet(mesh::BoundaryId{1}, left_voltage);
+
+  bc.setDirichlet(mesh::BoundaryId{2}, right_voltage);
+
+  // The remaining two sides are electrically insulating.
   bc.setNeumann(mesh::BoundaryId{3}, 0.0);
 
   bc.setNeumann(mesh::BoundaryId{4}, 0.0);
@@ -380,6 +436,13 @@ class FixedStepPlasmaSimulationTest : public ::testing::Test {
 class AdaptiveStepPlasmaSimulationTest : public ::testing::Test {
  protected:
   AdaptiveStepPlasmaSimulationTest() : mesh_(twoQuadsMeshPath()) {}
+
+  mesh::MoabMesh mesh_;
+};
+
+class AdaptiveStepPlasmaSimulation64x64Test : public ::testing::Test {
+ protected:
+  AdaptiveStepPlasmaSimulation64x64Test() : mesh_(poisson64x64MeshPath()) {}
 
   mesh::MoabMesh mesh_;
 };
@@ -1211,6 +1274,203 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   ASSERT_TRUE(simulation.advanceOneStep().success());
   ASSERT_TRUE(simulation.finished());
   EXPECT_THROW((void)simulation.advanceOneStep(), std::out_of_range);
+}
+
+TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
+       SolvesUniformElectronImpactIonizationAcrossMultipleSteps) {
+  constexpr double initial_density = 1.0;
+  constexpr double neutral_density = 4.0;
+  constexpr double rate_coefficient = 0.5;
+  constexpr double reaction_rate = neutral_density * rate_coefficient;
+  constexpr double time_step = 0.01;
+  constexpr std::size_t total_steps = 5;
+  constexpr double end_time = time_step * static_cast<double>(total_steps);
+
+  ASSERT_EQ(mesh_.numCells(), 64u * 64u);
+
+  physics::SpeciesSet species;
+  // Keep a strictly positive diffusivity, as required by the SG transport
+  // operator, while making its effect negligible for this uniform reaction
+  // regression. This leaves a multi-step discrete reference solution.
+  const auto ids = addElectronAndIon(species, 1.0, 0.5, 1e-16, 1e-16);
+  physics::SpeciesCellFields density(mesh_, species.size(), initial_density);
+
+  physics::ReactionNetwork reactions(species);
+  const auto ionization = reactions.addReaction(
+      {.name = "uniform electron-impact ionization",
+       .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), initial_density),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-10, .max_dt = time_step, .max_growth = 2.0});
+
+  ElectronImpactIonizationEvaluator evaluator{
+      .electron = ids.electron,
+      .ionization = ionization,
+      .neutral_density = neutral_density,
+      .rate_coefficient = rate_coefficient};
+
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time));
+
+  simulation.run();
+  ASSERT_TRUE(simulation.finished());
+  ASSERT_TRUE(simulation.hasLastTimeStepProposal());
+  EXPECT_EQ(simulation.step(), total_steps);
+  EXPECT_NEAR(simulation.time(), end_time, 1e-15);
+  EXPECT_NEAR(simulation.lastTimeStep(), time_step, 1e-15);
+
+  const double growth_per_step = 1.0 + time_step * reaction_rate;
+  const double expected_density =
+      initial_density * std::pow(growth_per_step, total_steps);
+  const double final_reaction_rate = reaction_rate * initial_density *
+                                     std::pow(growth_per_step, total_steps - 1);
+
+  EXPECT_NEAR(integratedDensity(mesh_, density[ids.electron]), expected_density,
+              1e-12);
+  EXPECT_NEAR(integratedDensity(mesh_, density[ids.ion]), expected_density,
+              1e-12);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_TRUE(std::isfinite(density[ids.electron][cell]));
+    EXPECT_TRUE(std::isfinite(density[ids.ion][cell]));
+    EXPECT_GE(density[ids.electron][cell], 0.0);
+    EXPECT_GE(density[ids.ion][cell], 0.0);
+    EXPECT_NEAR(simulation.reactionRates()[ionization][cell],
+                final_reaction_rate, 1e-12);
+    EXPECT_NEAR(simulation.source()[ids.electron][cell], final_reaction_rate,
+                1e-12);
+    EXPECT_NEAR(simulation.source()[ids.ion][cell], final_reaction_rate, 1e-12);
+    EXPECT_NEAR(density[ids.electron][cell], expected_density, 1e-12);
+    EXPECT_NEAR(density[ids.ion][cell], expected_density, 1e-12);
+    EXPECT_NEAR(simulation.chargeDensity()[cell], 0.0, 1e-12);
+    EXPECT_NEAR(simulation.potential()[cell], 0.0, 1e-12);
+  }
+
+  for (const double electric_field : simulation.electricFieldNormal()) {
+    EXPECT_TRUE(std::isfinite(electric_field));
+    EXPECT_NEAR(electric_field, 0.0, 1e-12);
+  }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
+       ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh) {
+  // Mesh coordinates are centimetres, so this is a 1 cm x 1 cm domain.
+  constexpr double domain_length_cm = 1.0;
+  constexpr double left_voltage = 0.0;
+  constexpr double right_voltage = 400.0;
+  constexpr double expected_electric_field_x =
+      -(right_voltage - left_voltage) / domain_length_cm;
+
+  // SI constants converted to the centimetre unit system used by this mesh.
+  constexpr double elementary_charge_coulomb = 1.602176634e-19;
+  constexpr double vacuum_permittivity_f_per_cm = 8.8541878128e-14;
+
+  // Number density: cm^-3; mobility: cm^2/(V s); diffusivity: cm^2/s.
+  constexpr double initial_density_cm3 = 1.0e6;
+  constexpr double electron_mobility_cm2_per_vs = 1.0e3;
+  constexpr double ion_mobility_cm2_per_vs = 1.5;
+  constexpr double electron_diffusivity_cm2_per_s = 1.0e2;
+  constexpr double ion_diffusivity_cm2_per_s = 4.0e-2;
+
+  // R = k n_e n_N, with k in cm^3/s and n_N in cm^-3.
+  constexpr double neutral_density_cm3 = 2.5e19;
+  constexpr double ionization_rate_coefficient_cm3_per_s = 1.0e-13;
+  constexpr double end_time_s = 2.0e-7;
+  constexpr double max_time_step_s = 1.0e-6;
+
+  ASSERT_EQ(mesh_.numCells(), 64u * 64u);
+
+  physics::SpeciesSet species;
+  const auto electron = species.add(
+      {.name = "e",
+       .charge = -elementary_charge_coulomb,
+       .mobility = electron_mobility_cm2_per_vs,
+       .diffusivity = electron_diffusivity_cm2_per_s,
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  const auto ion = species.add(
+      {.name = "Ar+",
+       .charge = elementary_charge_coulomb,
+       .mobility = ion_mobility_cm2_per_vs,
+       .diffusivity = ion_diffusivity_cm2_per_s,
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  physics::SpeciesCellFields density(mesh_, species.size(),
+                                     initial_density_cm3);
+
+  physics::ReactionNetwork reactions(species);
+  const auto ionization =
+      reactions.addReaction({.name = "electron-impact ionization",
+                             .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, vacuum_permittivity_f_per_cm,
+      makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
+      makeConstantSpeciesBoundaryConditions(species.size(),
+                                            initial_density_cm3),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.8,
+       .min_dt = 1.0e-12,
+       .max_dt = max_time_step_s,
+       .max_growth = 1.5});
+
+  // Initial neutrality makes the parallel-plate potential an exact solution.
+  ASSERT_TRUE(transport.prepareElectrostatics(density).success());
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    const double expected_potential =
+        left_voltage + (right_voltage - left_voltage) *
+                           mesh_.cellCenter(cell).x / domain_length_cm;
+    EXPECT_NEAR(transport.potential()[cell], expected_potential, 1.0e-8);
+  }
+
+  const auto left_face = findBoundaryFace(mesh_, mesh::BoundaryId{1});
+  const auto right_face = findBoundaryFace(mesh_, mesh::BoundaryId{2});
+  EXPECT_NEAR(transport.electricFieldNormal()[left_face],
+              -expected_electric_field_x, 1.0e-8);
+  EXPECT_NEAR(transport.electricFieldNormal()[right_face],
+              expected_electric_field_x, 1.0e-8);
+
+  const double initial_integrated_density =
+      integratedDensity(mesh_, density[electron]);
+  const double initial_centroid_x = densityCentroidX(mesh_, density[electron]);
+
+  ElectronImpactIonizationEvaluator evaluator{
+      .electron = electron,
+      .ionization = ionization,
+      .neutral_density = neutral_density_cm3,
+      .rate_coefficient = ionization_rate_coefficient_cm3_per_s};
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s));
+
+  simulation.run();
+
+  ASSERT_TRUE(simulation.finished());
+  ASSERT_TRUE(simulation.hasLastTimeStepProposal());
+  EXPECT_NEAR(simulation.time(), end_time_s, 1.0e-18);
+  EXPECT_GT(simulation.step(), 1u);
+  EXPECT_LT(simulation.lastTimeStep(), max_time_step_s);
+
+  EXPECT_GT(integratedDensity(mesh_, density[electron]),
+            initial_integrated_density);
+  EXPECT_GT(integratedDensity(mesh_, density[ion]), initial_integrated_density);
+  const double electron_centroid_x = densityCentroidX(mesh_, density[electron]);
+  const double ion_centroid_x = densityCentroidX(mesh_, density[ion]);
+  EXPECT_GT(electron_centroid_x, initial_centroid_x);
+  // Ionization is stronger where the electron density has drifted. Therefore
+  // the ion centroid need not move left of its initial value, but the faster
+  // electron population must still lie to its right.
+  EXPECT_GT(electron_centroid_x, ion_centroid_x);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_TRUE(std::isfinite(density[electron][cell]));
+    EXPECT_TRUE(std::isfinite(density[ion][cell]));
+    EXPECT_GE(density[electron][cell], 0.0);
+    EXPECT_GE(density[ion][cell], 0.0);
+    EXPECT_GT(simulation.reactionRates()[ionization][cell], 0.0);
+    EXPECT_GT(simulation.source()[electron][cell], 0.0);
+    EXPECT_GT(simulation.source()[ion][cell], 0.0);
+  }
 }
 
 }  // namespace pemu::simulation::test
