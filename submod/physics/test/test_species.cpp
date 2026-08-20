@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
-#include <filesystem>
+
+#include <pemu/mesh/moab_mesh.hpp>
 #include <pemu/physics/species.hpp>
+
+#include <filesystem>
 
 namespace pemu::physics::test {
 

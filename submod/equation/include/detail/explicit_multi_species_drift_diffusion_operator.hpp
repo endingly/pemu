@@ -11,6 +11,7 @@
 
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
+#include <pemu/field/plasma_field_metadata.hpp>
 
 #include <pemu/linalg/i_solver.hpp>
 
@@ -40,7 +41,9 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
 
       std::vector<boundary::BoundaryConditionSet> species_bc,
 
-      std::unique_ptr<linalg::ISolver> poisson_backend)
+      std::unique_ptr<linalg::ISolver> poisson_backend,
+
+      field::PlasmaFieldMetadata field_metadata = {})
 
       : mesh_(&mesh),
 
@@ -52,17 +55,21 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
 
         species_bc_(std::move(species_bc)),
 
-        charge_density_(mesh, 0.0),
+        field_metadata_(std::move(field_metadata)),
 
-        potential_(mesh, 0.0),
+        charge_density_(mesh, 0.0, field_metadata_.charge_density),
 
-        electric_field_normal_(mesh, 0.0),
+        potential_(mesh, 0.0, field_metadata_.electric_potential),
 
-        drift_velocity_(mesh, species.size(), 0.0),
+        electric_field_normal_(mesh, 0.0, field_metadata_.electric_field),
 
-        transport_loss_rate_(mesh, species.size(), 0.0),
+        drift_velocity_(mesh, species.size(), 0.0,
+                        field_metadata_.drift_velocity),
 
-        increments_(mesh, species.size(), 0.0),
+        transport_loss_rate_(mesh, species.size(), 0.0,
+                             field_metadata_.inverse_time),
+
+        increments_(mesh, species.size(), 0.0, field_metadata_.number_density),
 
         poisson_solver_(discretization::PoissonFvm(mesh, charge_density_,
                                                    permittivity, potential_bc_),
@@ -465,6 +472,11 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
     return *mesh_;
   }
 
+  [[nodiscard]]
+  const field::PlasmaFieldMetadata& fieldMetadata() const noexcept {
+    return field_metadata_;
+  }
+
  private:
   static std::unique_ptr<linalg::ISolver> validateBackend(
       std::unique_ptr<linalg::ISolver> backend) {
@@ -566,6 +578,8 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
   boundary::BoundaryConditionSet potential_bc_;
 
   std::vector<boundary::BoundaryConditionSet> species_bc_;
+
+  field::PlasmaFieldMetadata field_metadata_;
 
   // --------------------------------------------------------
   // Electrostatic workspace

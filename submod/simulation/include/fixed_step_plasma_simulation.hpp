@@ -38,9 +38,11 @@ class FixedStepPlasmaSimulation {
 
         clock_(std::move(clock)),
 
-        reaction_rates_(density.mesh(), reaction_network.size(), 0.0),
+        reaction_rates_(density.mesh(), reaction_network.size(), 0.0,
+                        transport_stepper.fieldMetadata().reaction_rate),
 
-        source_(density.mesh(), density.size(), 0.0) {
+        source_(density.mesh(), density.size(), 0.0,
+                transport_stepper.fieldMetadata().number_density_source) {
     validateConfiguration();
   }
 

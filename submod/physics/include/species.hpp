@@ -2,9 +2,7 @@
 
 #include <cstdint>
 #include <limits>
-#include <pemu/field/cell_field.hpp>
-#include <pemu/field/face_field.hpp>
-#include <pemu/mesh/moab_mesh.hpp>
+#include <pemu/field/field_set.hpp>
 #include <pemu/physics/charge_polarity.hpp>
 #include <stdexcept>
 #include <string>
@@ -21,6 +19,9 @@ struct SpeciesId {
 
 inline constexpr SpeciesId invalid_species{
     std::numeric_limits<std::uint32_t>::max()};
+
+using SpeciesCellFields = field::CellFieldSet<double, SpeciesId>;
+using SpeciesFaceFields = field::FaceFieldSet<double, SpeciesId>;
 
 struct SpeciesProperties {
   std::string name;
@@ -130,93 +131,6 @@ class SpeciesSet {
 
  private:
   std::vector<SpeciesProperties> species_;
-};
-
-class SpeciesCellFields {
- public:
-  SpeciesCellFields(const mesh::IMesh& mesh, std::size_t species_count,
-                    double initial_value = 0.0)
-      : mesh_(&mesh) {
-    fields_.reserve(species_count);
-
-    for (std::size_t i = 0; i < species_count; ++i) {
-
-      fields_.emplace_back(mesh, initial_value);
-    }
-  }
-
-  [[nodiscard]]
-  std::size_t size() const noexcept {
-    return fields_.size();
-  }
-
-  [[nodiscard]]
-  const mesh::IMesh& mesh() const noexcept {
-    return *mesh_;
-  }
-
-  field::CellField<double>& operator[](SpeciesId id) {
-    return fields_.at(id.value);
-  }
-
-  const field::CellField<double>& operator[](SpeciesId id) const {
-    return fields_.at(id.value);
-  }
-
-  void fill(double value) {
-    for (auto& field : fields_) {
-
-      field.fill(value);
-    }
-  }
-
- private:
-  const mesh::IMesh* mesh_;
-
-  std::vector<field::CellField<double>> fields_;
-};
-
-class SpeciesFaceFields {
- public:
-  SpeciesFaceFields(const mesh::IMesh& mesh, std::size_t species_count,
-                    double initial_value = 0.0)
-      : mesh_(&mesh) {
-    fields_.reserve(species_count);
-
-    for (std::size_t i = 0; i < species_count; ++i) {
-
-      fields_.emplace_back(mesh, initial_value);
-    }
-  }
-
-  [[nodiscard]]
-  std::size_t size() const noexcept {
-    return fields_.size();
-  }
-
-  [[nodiscard]]
-  const mesh::IMesh& mesh() const noexcept {
-    return *mesh_;
-  }
-
-  field::FaceField<double>& operator[](SpeciesId id) {
-    return fields_.at(id.value);
-  }
-
-  const field::FaceField<double>& operator[](SpeciesId id) const {
-    return fields_.at(id.value);
-  }
-
-  void fill(double value) {
-    for (auto& field : fields_) {
-      field.fill(value);
-    }
-  }
-
- private:
-  const mesh::IMesh* mesh_;
-
-  std::vector<field::FaceField<double>> fields_;
 };
 
 }  // namespace pemu::physics

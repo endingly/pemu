@@ -6,6 +6,7 @@
   "dependencies": [
     "fmt",
     "gtest",
+    "mp-units",
     "suitesparse-umfpack",
     "eigen3",
     "moab"

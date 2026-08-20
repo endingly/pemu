@@ -2,10 +2,17 @@
 
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
+#include <pemu/field/field_set.hpp>
+#include <pemu/field/quantity_io.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
+#include <pemu/unit/plasma_quantities.hpp>
 
+#include <mp-units/systems/si.h>
+
+#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
+#include <type_traits>
 
 namespace pemu::field::test {
 
@@ -25,6 +32,15 @@ class FieldTest : public ::testing::Test {
 
   mesh::MoabMesh mesh_;
 };
+
+struct TestFieldId {
+  std::uint32_t value{};
+};
+
+template <typename QS, typename U>
+concept FormsQuantityReference =
+    requires(std::remove_cvref_t<QS> quantity_spec,
+             std::remove_cvref_t<U> unit) { quantity_spec[unit]; };
 
 }  // namespace
 
@@ -130,6 +146,106 @@ TEST_F(FieldTest, FaceFieldKeepsMeshAssociation) {
   FaceField<double> field(mesh_);
 
   EXPECT_EQ(&field.mesh(), &mesh_);
+}
+
+TEST_F(FieldTest, FieldSetGroupsTypedFieldsAndPropagatesMetadata) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  const auto metadata =
+      makeFieldMetadata("inverse length", isq::repetency[one / m]);
+  CellFieldSet<double, TestFieldId> fields(mesh_, 2, 1.5, metadata);
+
+  EXPECT_EQ(fields.size(), 2u);
+  EXPECT_FALSE(fields.empty());
+  EXPECT_EQ(&fields.mesh(), &mesh_);
+  EXPECT_EQ(fields.span().size(), 2u);
+  EXPECT_TRUE(fields[TestFieldId{0}].metadata().physical_quantity->represents(
+      isq::repetency, one / m));
+  EXPECT_TRUE(fields[TestFieldId{1}].metadata().physical_quantity->represents(
+      isq::repetency, one / m));
+
+  fields[TestFieldId{0}][mesh::CellId{0}] = 9.0;
+  EXPECT_DOUBLE_EQ(fields[TestFieldId{0}][mesh::CellId{0}], 9.0);
+  EXPECT_DOUBLE_EQ(fields[TestFieldId{1}][mesh::CellId{0}], 1.5);
+
+  fields.fill(4.0);
+  for (const auto& field : fields) {
+    for (const auto value : field) {
+      EXPECT_DOUBLE_EQ(value, 4.0);
+    }
+  }
+
+  FaceFieldSet<double, TestFieldId> face_fields(mesh_, 1, 2.0, metadata);
+  EXPECT_EQ(face_fields[TestFieldId{0}].size(), mesh_.numFaces());
+  EXPECT_DOUBLE_EQ(face_fields[TestFieldId{0}][mesh::FaceId{0}], 2.0);
+}
+
+// ------------------------------------------------------------
+// Unit metadata and mp-units boundary conversion
+// ------------------------------------------------------------
+
+TEST_F(FieldTest, PhysicalQuantityIsMetadataAndRawStorageRemainsDouble) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  static_assert(
+      FormsQuantityReference<decltype(isq::electric_potential), decltype(V)>);
+  static_assert(!FormsQuantityReference<decltype(isq::electric_potential),
+                                        decltype(cm / s)>);
+
+  CellField<double> field(
+      mesh_, 0.0, makeFieldMetadata("potential", isq::electric_potential[V]));
+
+  static_assert(std::same_as<CellField<double>::value_type, double>);
+  static_assert(std::same_as<decltype(field.data()), double*>);
+
+  ASSERT_TRUE(field.metadata().hasPhysicalQuantity());
+  EXPECT_EQ(field.metadata().name, "potential");
+  EXPECT_EQ(field.metadata().physical_quantity->unitSymbol(), "V");
+  EXPECT_TRUE(field.metadata().physical_quantity->represents(
+      isq::electric_potential, V));
+}
+
+TEST_F(FieldTest, QuantityBoundaryConvertsToFieldStorageUnit) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  constexpr auto centimetre_length = isq::length[cm];
+  CellField<double> field(mesh_, 0.0,
+                          makeFieldMetadata("x", centimetre_length));
+
+  fillQuantity(field, 3.0 * m, centimetre_length);
+  EXPECT_DOUBLE_EQ(field[0], 300.0);
+  EXPECT_DOUBLE_EQ(field[1], 300.0);
+
+  setQuantity(field, mesh::CellId{0}, 2.5 * m, centimetre_length);
+  setQuantity(field, mesh::CellId{1}, 12.0 * mm, centimetre_length);
+
+  EXPECT_DOUBLE_EQ(field[0], 250.0);
+  EXPECT_DOUBLE_EQ(field[1], 1.2);
+  const auto value = quantityAt(field, mesh::CellId{0}, centimetre_length);
+  EXPECT_DOUBLE_EQ(value.numerical_value_ref_in(cm), 250.0);
+}
+
+TEST_F(FieldTest, QuantityBoundaryRejectsReferenceDifferentFromMetadata) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  FaceField<double> field(
+      mesh_, 0.0,
+      makeFieldMetadata(
+          "normal electric field",
+          pemu::unit::plasma_quantity::normal_electric_field_strength[V / cm]));
+
+  EXPECT_THROW((void)quantityAt(field, mesh::FaceId{0}, isq::speed[m / s]),
+               std::invalid_argument);
+
+  CellField<double> potential(
+      mesh_, 0.0, makeFieldMetadata("potential", isq::electric_potential[V]));
+  EXPECT_THROW((void)quantityAt(potential, mesh::CellId{0},
+                                isq::electric_potential_difference[V]),
+               std::invalid_argument);
 }
 
 }  // namespace pemu::field::test

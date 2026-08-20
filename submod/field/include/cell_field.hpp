@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pemu/field/field_metadata.hpp>
 #include <pemu/field/types.hpp>
 
 #include <algorithm>
@@ -21,8 +22,17 @@ class CellField {
   explicit CellField(const mesh::IMesh& mesh)
       : mesh_(&mesh), data_(mesh.numCells()) {}
 
+  CellField(const mesh::IMesh& mesh, FieldMetadata metadata)
+      : mesh_(&mesh), data_(mesh.numCells()), metadata_(std::move(metadata)) {}
+
   CellField(const mesh::IMesh& mesh, const T& initial_value)
       : mesh_(&mesh), data_(mesh.numCells(), initial_value) {}
+
+  CellField(const mesh::IMesh& mesh, const T& initial_value,
+            FieldMetadata metadata)
+      : mesh_(&mesh),
+        data_(mesh.numCells(), initial_value),
+        metadata_(std::move(metadata)) {}
 
   [[nodiscard]]
   size_type size() const noexcept {
@@ -38,6 +48,13 @@ class CellField {
   const mesh::IMesh& mesh() const noexcept {
     return *mesh_;
   }
+
+  [[nodiscard]]
+  const FieldMetadata& metadata() const noexcept {
+    return metadata_;
+  }
+
+  void setMetadata(FieldMetadata metadata) { metadata_ = std::move(metadata); }
 
   T& operator[](const mesh::CellId cell) noexcept {
     return data_[static_cast<size_type>(cell)];
@@ -88,6 +105,7 @@ class CellField {
  private:
   const mesh::IMesh* mesh_;
   std::vector<T> data_;
+  FieldMetadata metadata_;
 };
 
 }  // namespace pemu::field

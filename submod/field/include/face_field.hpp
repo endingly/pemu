@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pemu/field/field_metadata.hpp>
 #include <pemu/field/types.hpp>
 
 #include <algorithm>
@@ -20,8 +21,17 @@ class FaceField {
   explicit FaceField(const mesh::IMesh& mesh)
       : mesh_(&mesh), data_(mesh.numFaces()) {}
 
+  FaceField(const mesh::IMesh& mesh, FieldMetadata metadata)
+      : mesh_(&mesh), data_(mesh.numFaces()), metadata_(std::move(metadata)) {}
+
   FaceField(const mesh::IMesh& mesh, const T& initial_value)
       : mesh_(&mesh), data_(mesh.numFaces(), initial_value) {}
+
+  FaceField(const mesh::IMesh& mesh, const T& initial_value,
+            FieldMetadata metadata)
+      : mesh_(&mesh),
+        data_(mesh.numFaces(), initial_value),
+        metadata_(std::move(metadata)) {}
 
   [[nodiscard]]
   size_type size() const noexcept {
@@ -37,6 +47,13 @@ class FaceField {
   const mesh::IMesh& mesh() const noexcept {
     return *mesh_;
   }
+
+  [[nodiscard]]
+  const FieldMetadata& metadata() const noexcept {
+    return metadata_;
+  }
+
+  void setMetadata(FieldMetadata metadata) { metadata_ = std::move(metadata); }
 
   T& operator[](const mesh::FaceId face) noexcept {
     return data_[static_cast<size_type>(face)];
@@ -87,6 +104,7 @@ class FaceField {
  private:
   const mesh::IMesh* mesh_;
   std::vector<T> data_;
+  FieldMetadata metadata_;
 };
 
 }  // namespace pemu::field

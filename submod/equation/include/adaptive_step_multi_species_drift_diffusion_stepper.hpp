@@ -3,6 +3,7 @@
 #include <memory>
 #include <pemu/equation/detail/explicit_multi_species_drift_diffusion_operator.hpp>
 #include <pemu/equation/time_integration/adaptive_time_step_controller.hpp>
+#include <pemu/field/plasma_field_metadata.hpp>
 #include <pemu/linalg/i_solver.hpp>
 #include <stdexcept>
 #include <utility>
@@ -23,11 +24,14 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
 
       std::unique_ptr<linalg::ISolver> poisson_backend,
 
-      time_integration::AdaptiveTimeStepConfig time_step_config)
+      time_integration::AdaptiveTimeStepConfig time_step_config,
+
+      field::PlasmaFieldMetadata field_metadata = {})
 
       : transport_operator_(mesh, species, permittivity,
                             std::move(potential_bc), std::move(species_bc),
-                            std::move(poisson_backend)),
+                            std::move(poisson_backend),
+                            std::move(field_metadata)),
 
         controller_(time_step_config) {}
 
@@ -191,6 +195,11 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
   [[nodiscard]]
   bool electrostaticsReady() const noexcept {
     return transport_operator_.electrostaticsReady();
+  }
+
+  [[nodiscard]]
+  const field::PlasmaFieldMetadata& fieldMetadata() const noexcept {
+    return transport_operator_.fieldMetadata();
   }
 
  private:

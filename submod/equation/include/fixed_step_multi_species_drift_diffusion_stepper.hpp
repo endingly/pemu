@@ -3,6 +3,7 @@
 #include <pemu/boundary/boundary_condition_set.hpp>
 #include <pemu/equation/fixed_step_explicit_species_continuity_stepper.hpp>
 #include <pemu/equation/poisson_solver.hpp>
+#include <pemu/field/plasma_field_metadata.hpp>
 #include <pemu/mesh/i_mesh.hpp>
 #include <pemu/physics/species.hpp>
 
@@ -18,7 +19,8 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
       double permittivity, double dt,
       boundary::BoundaryConditionSet potential_bc,
       std::vector<boundary::BoundaryConditionSet> species_bc,
-      std::unique_ptr<linalg::ISolver> poisson_backend);
+      std::unique_ptr<linalg::ISolver> poisson_backend,
+      field::PlasmaFieldMetadata field_metadata = {});
 
   void buildTransportSteppers();
 
@@ -50,6 +52,11 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
 
   [[nodiscard]] double timeStep() const noexcept { return dt_; }
 
+  [[nodiscard]] const field::PlasmaFieldMetadata& fieldMetadata()
+      const noexcept {
+    return field_metadata_;
+  }
+
   [[nodiscard]] double transportCfl(physics::SpeciesId id) const {
     auto _ = species_->at(id);
     const auto index = static_cast<std::size_t>(id.value);
@@ -74,6 +81,7 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
   double dt_;
   boundary::BoundaryConditionSet potential_bc_;
   std::vector<boundary::BoundaryConditionSet> species_bc_;
+  field::PlasmaFieldMetadata field_metadata_;
   field::CellField<double> charge_density_;
   field::CellField<double> potential_;
   field::FaceField<double> electric_field_normal_;

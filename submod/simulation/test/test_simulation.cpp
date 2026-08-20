@@ -4,6 +4,8 @@
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
+#include <pemu/field/plasma_field_metadata.hpp>
+#include <pemu/field/quantity_io.hpp>
 #include <pemu/linalg/cholmod_solver.hpp>
 #include <pemu/linalg/i_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
@@ -13,6 +15,8 @@
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
 #include <pemu/simulation/fixed_step_plasma_simulation.hpp>
+
+#include <mp-units/systems/si.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1357,29 +1361,44 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
 
 TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
        ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh) {
-  // Mesh coordinates are centimetres, so this is a 1 cm x 1 cm domain.
-  constexpr double domain_length_cm = 1.0;
-  constexpr double left_voltage = 0.0;
-  constexpr double right_voltage = 400.0;
-  constexpr double expected_electric_field_x =
-      -(right_voltage - left_voltage) / domain_length_cm;
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
 
-  // SI constants converted to the centimetre unit system used by this mesh.
-  constexpr double elementary_charge_coulomb = 1.602176634e-19;
-  constexpr double vacuum_permittivity_f_per_cm = 8.8541878128e-14;
+  constexpr auto number_density_unit = one / cubic(cm);
+  constexpr auto mobility_unit = square(cm) / (V * s);
+  constexpr auto diffusivity_unit = square(cm) / s;
+  constexpr auto ionization_coefficient_unit = cubic(cm) / s;
 
-  // Number density: cm^-3; mobility: cm^2/(V s); diffusivity: cm^2/s.
-  constexpr double initial_density_cm3 = 1.0e6;
-  constexpr double electron_mobility_cm2_per_vs = 1.0e3;
-  constexpr double ion_mobility_cm2_per_vs = 1.5;
-  constexpr double electron_diffusivity_cm2_per_s = 1.0e2;
-  constexpr double ion_diffusivity_cm2_per_s = 4.0e-2;
+  // Strong quantities are converted to raw doubles only at solver boundaries.
+  constexpr auto domain_length = 1.0 * cm;
+  constexpr auto left_potential = 0.0 * V;
+  constexpr auto right_potential = 400.0 * V;
+  constexpr auto expected_electric_field_x =
+      -(right_potential - left_potential) / domain_length;
+  constexpr auto elementary_charge = 1.602176634e-19 * C;
+  constexpr auto vacuum_permittivity = 8.8541878128e-14 * F / cm;
+  constexpr auto initial_density = 1.0e6 * number_density_unit;
+  constexpr auto electron_mobility = 1.0e3 * mobility_unit;
+  constexpr auto ion_mobility = 1.5 * mobility_unit;
+  constexpr auto electron_diffusivity = 1.0e2 * diffusivity_unit;
+  constexpr auto ion_diffusivity = 4.0e-2 * diffusivity_unit;
+  constexpr auto neutral_density = 2.5e19 * number_density_unit;
+  constexpr auto ionization_rate_coefficient =
+      1.0e-13 * ionization_coefficient_unit;
+  constexpr auto end_time = 2.0e-7 * s;
+  constexpr auto maximum_time_step = 1.0e-6 * s;
 
-  // R = k n_e n_N, with k in cm^3/s and n_N in cm^-3.
-  constexpr double neutral_density_cm3 = 2.5e19;
-  constexpr double ionization_rate_coefficient_cm3_per_s = 1.0e-13;
-  constexpr double end_time_s = 2.0e-7;
-  constexpr double max_time_step_s = 1.0e-6;
+  constexpr double domain_length_cm = domain_length.numerical_value_in(cm);
+  constexpr double left_voltage = left_potential.numerical_value_in(V);
+  constexpr double right_voltage = right_potential.numerical_value_in(V);
+  constexpr double elementary_charge_coulomb =
+      elementary_charge.numerical_value_in(C);
+  constexpr double initial_density_cm3 =
+      initial_density.numerical_value_in(number_density_unit);
+  constexpr double end_time_s = end_time.numerical_value_in(s);
+  constexpr double max_time_step_s = maximum_time_step.numerical_value_in(s);
+
+  const auto field_metadata = field::centimetrePlasmaFieldMetadata();
 
   ASSERT_EQ(mesh_.numCells(), 64u * 64u);
 
@@ -1387,17 +1406,17 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   const auto electron = species.add(
       {.name = "e",
        .charge = -elementary_charge_coulomb,
-       .mobility = electron_mobility_cm2_per_vs,
-       .diffusivity = electron_diffusivity_cm2_per_s,
+       .mobility = electron_mobility.numerical_value_in(mobility_unit),
+       .diffusivity = electron_diffusivity.numerical_value_in(diffusivity_unit),
        .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
   const auto ion = species.add(
       {.name = "Ar+",
        .charge = elementary_charge_coulomb,
-       .mobility = ion_mobility_cm2_per_vs,
-       .diffusivity = ion_diffusivity_cm2_per_s,
+       .mobility = ion_mobility.numerical_value_in(mobility_unit),
+       .diffusivity = ion_diffusivity.numerical_value_in(diffusivity_unit),
        .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
-  physics::SpeciesCellFields density(mesh_, species.size(),
-                                     initial_density_cm3);
+  physics::SpeciesCellFields density(mesh_, species.size(), initial_density_cm3,
+                                     field_metadata.number_density);
 
   physics::ReactionNetwork reactions(species);
   const auto ionization =
@@ -1405,7 +1424,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
                              .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
 
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
-      mesh_, species, vacuum_permittivity_f_per_cm,
+      mesh_, species, vacuum_permittivity.numerical_value_in(F / cm),
       makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
       makeConstantSpeciesBoundaryConditions(species.size(),
                                             initial_density_cm3),
@@ -1413,7 +1432,8 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
       {.safety = 0.8,
        .min_dt = 1.0e-12,
        .max_dt = max_time_step_s,
-       .max_growth = 1.5});
+       .max_growth = 1.5},
+      field_metadata);
 
   // Initial neutrality makes the parallel-plate potential an exact solution.
   ASSERT_TRUE(transport.prepareElectrostatics(density).success());
@@ -1427,9 +1447,21 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   const auto left_face = findBoundaryFace(mesh_, mesh::BoundaryId{1});
   const auto right_face = findBoundaryFace(mesh_, mesh::BoundaryId{2});
   EXPECT_NEAR(transport.electricFieldNormal()[left_face],
-              -expected_electric_field_x, 1.0e-8);
+              -expected_electric_field_x.numerical_value_in(V / cm), 1.0e-8);
   EXPECT_NEAR(transport.electricFieldNormal()[right_face],
-              expected_electric_field_x, 1.0e-8);
+              expected_electric_field_x.numerical_value_in(V / cm), 1.0e-8);
+
+  ASSERT_TRUE(density[electron].metadata().hasPhysicalQuantity());
+  ASSERT_TRUE(transport.potential().metadata().hasPhysicalQuantity());
+  ASSERT_TRUE(transport.electricFieldNormal().metadata().hasPhysicalQuantity());
+  EXPECT_TRUE(density[electron].metadata().physical_quantity->represents(
+      pemu::unit::plasma_quantity::particle_number_density,
+      number_density_unit));
+  EXPECT_TRUE(transport.potential().metadata().physical_quantity->represents(
+      isq::electric_potential, V));
+  EXPECT_TRUE(
+      transport.electricFieldNormal().metadata().physical_quantity->represents(
+          pemu::unit::plasma_quantity::normal_electric_field_strength, V / cm));
 
   const double initial_integrated_density =
       integratedDensity(mesh_, density[electron]);
@@ -1438,8 +1470,10 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ElectronImpactIonizationEvaluator evaluator{
       .electron = electron,
       .ionization = ionization,
-      .neutral_density = neutral_density_cm3,
-      .rate_coefficient = ionization_rate_coefficient_cm3_per_s};
+      .neutral_density =
+          neutral_density.numerical_value_in(number_density_unit),
+      .rate_coefficient = ionization_rate_coefficient.numerical_value_in(
+          ionization_coefficient_unit)};
   AdaptiveStepPlasmaSimulation simulation(
       density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s));
 
@@ -1447,6 +1481,18 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
 
   ASSERT_TRUE(simulation.finished());
   ASSERT_TRUE(simulation.hasLastTimeStepProposal());
+  ASSERT_TRUE(
+      simulation.reactionRates()[ionization].metadata().hasPhysicalQuantity());
+  ASSERT_TRUE(simulation.source()[electron].metadata().hasPhysicalQuantity());
+  EXPECT_TRUE(simulation.reactionRates()[ionization]
+                  .metadata()
+                  .physical_quantity->represents(
+                      pemu::unit::plasma_quantity::reaction_rate_density,
+                      one / (cubic(cm) * s)));
+  EXPECT_TRUE(
+      simulation.source()[electron].metadata().physical_quantity->represents(
+          pemu::unit::plasma_quantity::particle_number_density_rate,
+          one / (cubic(cm) * s)));
   EXPECT_NEAR(simulation.time(), end_time_s, 1.0e-18);
   EXPECT_GT(simulation.step(), 1u);
   EXPECT_LT(simulation.lastTimeStep(), max_time_step_s);

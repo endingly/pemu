@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 162 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 167 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -57,6 +57,10 @@
 | `FaceFieldSupportsDenseIdAccess` | 稠密 `FaceId` 可读写对应分量。 |
 | `FaceFieldAtRejectsInvalidFace` | 检查式面访问会拒绝越界。 |
 | `FaceFieldKeepsMeshAssociation` | 面场保留原网格身份。 |
+| `FieldTest.FieldSetGroupsTypedFieldsAndPropagatesMetadata` | `FieldSet` 能按强类型稠密 ID 聚合相互独立的单元场与面场，并统一保留网格、初值、元数据、遍历和批量填充语义。 |
+| `FieldTest.PhysicalQuantityIsMetadataAndRawStorageRemainsDouble` | mp-units quantity specification 与 unit 作为每场一份的类型擦除元数据存在；不相容的 specification/unit 不能组成 reference，单位符号自动生成，而场元素、`data()` 和核心存储仍为 `double`。 |
+| `FieldTest.QuantityBoundaryConvertsToFieldStorageUnit` | `fillQuantity`/`setQuantity` 可将米输入换算为按厘米存储的裸值，`quantityAt` 能重新包装和换算输出。 |
+| `FieldTest.QuantityBoundaryRejectsReferenceDifferentFromMetadata` | 边界适配器会拒绝单位不同的 reference，也会拒绝同为伏特但 quantity specification 不同的 reference。 |
 
 ## 离散算子（`submod/discretization/test/test_operator.cpp`）
 
@@ -222,4 +226,4 @@
 | `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
-| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；以带 SI 常数的厘米制参数验证初始线性电势、电场受输运稳定性约束的多步自适应推进、正电离源项、非负有限密度，以及电子质心位于离子质心右侧。 |
+| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的单位元数据传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。 |

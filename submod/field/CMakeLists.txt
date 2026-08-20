@@ -7,7 +7,7 @@ pemu_register_interface_headers(
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 target_link_libraries(
-    field INTERFACE pemu::mesh
+    field INTERFACE pemu::mesh pemu::unit
 )
 
 if(BUILD_TESTING)

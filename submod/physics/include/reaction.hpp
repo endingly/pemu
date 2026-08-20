@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <pemu/field/field_set.hpp>
 #include <pemu/physics/ionization_reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <string>
@@ -11,6 +12,8 @@ struct ReactionId {
   std::uint32_t value{};
   friend constexpr bool operator==(ReactionId, ReactionId) noexcept = default;
 };
+
+using ReactionRateFields = field::CellFieldSet<double, ReactionId>;
 
 struct StoichiometricTerm {
   physics::SpeciesId species;
@@ -152,52 +155,6 @@ class ReactionNetwork {
   const physics::SpeciesSet* species_;
 
   std::vector<Reaction> reactions_;
-};
-
-class ReactionRateFields {
- public:
-  ReactionRateFields(const mesh::IMesh& mesh, std::size_t reaction_count,
-                     double initial_value = 0.0)
-      : mesh_(&mesh) {
-    fields_.reserve(reaction_count);
-    for (std::size_t i = 0; i < reaction_count; ++i) {
-      fields_.emplace_back(mesh, initial_value);
-    }
-  }
-
-  [[nodiscard]]
-  std::size_t size() const noexcept {
-    return fields_.size();
-  }
-
-  [[nodiscard]]
-  const mesh::IMesh& mesh() const noexcept {
-    return *mesh_;
-  }
-
-  field::CellField<double>& operator[](ReactionId id) {
-    return fields_.at(id.value);
-  }
-
-  const field::CellField<double>& operator[](ReactionId id) const {
-    return fields_.at(id.value);
-  }
-
-  void fill(double value) {
-    for (auto& field : fields_) {
-      field.fill(value);
-    }
-  }
-
-  [[nodiscard]]
-  std::span<const field::CellField<double>> span() const noexcept {
-    return fields_;
-  }
-
- private:
-  const mesh::IMesh* mesh_;
-
-  std::vector<field::CellField<double>> fields_;
 };
 
 struct ElectronImpactIonizationEvaluator {
