@@ -1023,4 +1023,194 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   }
 }
 
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       AdvanceOneStepEvaluatesReactionAndUpdatesSpecies) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+
+  physics::ReactionNetwork reactions(species);
+  const auto ionization = reactions.addReaction(
+      {.name = "electron impact ionization",
+       .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  ElectronImpactIonizationEvaluator evaluator{.electron = ids.electron,
+                                              .ionization = ionization,
+                                              .neutral_density = 4.0,
+                                              .rate_coefficient = 0.5};
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          evaluator, AdaptiveTimeClock(0.1));
+
+  ASSERT_TRUE(simulation.advanceOneStep().success());
+  ASSERT_TRUE(simulation.hasLastTimeStepProposal());
+
+  EXPECT_NEAR(simulation.time(), 0.04, 1e-14);
+  EXPECT_NEAR(simulation.lastTimeStep(), 0.04, 1e-14);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(simulation.reactionRates()[ionization][cell], 2.0, 1e-12);
+    EXPECT_NEAR(simulation.source()[ids.electron][cell], 2.0, 1e-12);
+    EXPECT_NEAR(simulation.source()[ids.ion][cell], 2.0, 1e-12);
+    EXPECT_NEAR(density[ids.electron][cell], 1.08, 1e-12);
+    EXPECT_NEAR(density[ids.ion][cell], 1.08, 1e-12);
+  }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       ReactionRateIsReevaluatedFromUpdatedStateEveryStep) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+
+  physics::ReactionNetwork reactions(species);
+  const auto ionization = reactions.addReaction(
+      {.name = "ionization",
+       .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  std::vector<double> observations;
+  RecordingIonizationEvaluator evaluator{
+      .electron = ids.electron,
+      .ionization = ionization,
+      .neutral_density = 4.0,
+      .rate_coefficient = 0.5,
+      .observed_electron_density = &observations};
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          evaluator, AdaptiveTimeClock(0.08));
+
+  simulation.run();
+
+  ASSERT_EQ(observations.size(), 2u);
+  EXPECT_NEAR(observations[0], 1.0, 1e-12);
+  EXPECT_NEAR(observations[1], 1.08, 1e-12);
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       ReactionEvaluatorSeesCurrentElectricField) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+
+  physics::ReactionNetwork reactions(species);
+  const auto reaction = reactions.addReaction(
+      {.name = "field dependent test reaction",
+       .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeLinearXPotentialBoundaryConditions(mesh_),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 1e-3, .max_growth = 2.0});
+
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport,
+      ElectricFieldAwareEvaluator{.reaction = reaction},
+      AdaptiveTimeClock(1e-3));
+
+  ASSERT_TRUE(simulation.advanceOneStep().success());
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(simulation.reactionRates()[reaction][cell], 1.0, 1e-12);
+  }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       ReactionSinkLimitsTimeStepAndPreservesNonNegativeDensity) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+
+  physics::ReactionNetwork reactions(species);
+  const auto loss = reactions.addReaction(
+      {.name = "pair loss",
+       .stoichiometry = {{ids.electron, -1.0}, {ids.ion, -1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.5, .max_growth = 2.0});
+
+  ElectronImpactIonizationEvaluator evaluator{.electron = ids.electron,
+                                              .ionization = loss,
+                                              .neutral_density = 1.0,
+                                              .rate_coefficient = 10.0};
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          evaluator, AdaptiveTimeClock(1.0));
+
+  ASSERT_TRUE(simulation.advanceOneStep().success());
+  const auto& proposal = simulation.lastTimeStepProposal();
+
+  EXPECT_LT(proposal.dt, 0.1);
+  EXPECT_GT(proposal.dt, 0.0);
+  EXPECT_LT(proposal.positivity_limit, 0.1);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(density[ids.electron][cell], 1.0 - 10.0 * proposal.dt, 1e-12);
+    EXPECT_NEAR(density[ids.ion][cell], 1.0 - 10.0 * proposal.dt, 1e-12);
+    EXPECT_GE(density[ids.electron][cell], 0.0);
+    EXPECT_GE(density[ids.ion][cell], 0.0);
+  }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       SolvesPoissonOncePerAdaptiveStepAndReusesFactorization) {
+  physics::SpeciesSet species;
+  auto _ = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+
+  auto backend = std::make_unique<CountingSolver>();
+  auto* counting_solver = backend.get();
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::move(backend),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          NoReactionEvaluator{},
+                                          AdaptiveTimeClock(0.1));
+  simulation.run();
+
+  EXPECT_EQ(simulation.step(), 3u);
+  EXPECT_EQ(counting_solver->analyze_count, 1);
+  EXPECT_EQ(counting_solver->factorize_count, 1);
+  EXPECT_EQ(counting_solver->solve_count, 3);
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       RejectsAdvanceAfterSimulationFinished) {
+  physics::SpeciesSet species;
+  auto _ = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          NoReactionEvaluator{},
+                                          AdaptiveTimeClock(0.04));
+  ASSERT_TRUE(simulation.advanceOneStep().success());
+  ASSERT_TRUE(simulation.finished());
+  EXPECT_THROW((void)simulation.advanceOneStep(), std::out_of_range);
+}
+
 }  // namespace pemu::simulation::test

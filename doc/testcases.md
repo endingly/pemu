@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 152 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 161 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -193,6 +193,9 @@
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsWrongSpeciesFieldCount` | 场数组物种数必须与 `SpeciesSet` 一致。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsFieldsFromDifferentMesh` | 多物种场不能跨网格传给推进器。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.MatchesLegacyTwoSpeciesSolver` | 更一般的固定多物种实现与固定双物种实现给出相同结果。 |
+| `AdaptiveTimeStepControllerTest.AppliesSafetyAndGrowthLimits` | 时间步提议同时服从安全系数、稳定性限制和相对上一时刻的增长上限。 |
+| `AdaptiveTimeStepControllerTest.TruncatesFinalStepToRemainingTime` | 时间步提议会被剩余时间截断，保证最终时刻精确对齐。 |
+| `AdaptiveTimeStepControllerTest.RejectsNoPositiveAdmissibleTimeStep` | 稳定性或正性限制为零时拒绝不存在正步长的推进。 |
 | `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.UsesConfiguredMaximumTimeStep` | 稳定性允许更大步长时，自适应推进器仍服从用户给定的 `max_dt`。 |
 | `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.FinalTimeStepEqualsRemainingTime` | 最后一步被截断为剩余时间，避免越过终止时刻。 |
 
@@ -212,3 +215,9 @@
 | `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
+| `AdaptiveStepPlasmaSimulationTest.AdvanceOneStepEvaluatesReactionAndUpdatesSpecies` | 单个自适应步完成电静力、反应率、化学源项和物种更新，且记录实际步长。 |
+| `AdaptiveStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一个自适应步都从最新粒子密度重新计算反应率。 |
+| `AdaptiveStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 自适应反应模型读取的电场来自同一时间层的泊松求解。 |
+| `AdaptiveStepPlasmaSimulationTest.ReactionSinkLimitsTimeStepAndPreservesNonNegativeDensity` | 强反应损失会收紧正性步长限制，更新后所有物种密度保持非负。 |
+| `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
+| `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
