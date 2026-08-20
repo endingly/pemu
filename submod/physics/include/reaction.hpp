@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <pemu/physics/ionization_reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <string>
 
@@ -197,6 +198,21 @@ class ReactionRateFields {
   const mesh::IMesh* mesh_;
 
   std::vector<field::CellField<double>> fields_;
+};
+
+struct ElectronImpactIonizationEvaluator {
+  physics::SpeciesId electron;
+  physics::ReactionId ionization;
+  double neutral_density{};
+  double rate_coefficient{};
+  void operator()(const physics::SpeciesCellFields& density,
+                  const field::CellField<double>& /* potential */,
+                  const field::FaceField<double>& /* electric_field */,
+                  physics::ReactionRateFields& rates) const {
+    physics::reaction::electronImpactIonizationRate(
+        density[electron], neutral_density, rate_coefficient,
+        rates[ionization]);
+  }
 };
 
 }  // namespace pemu::physics
