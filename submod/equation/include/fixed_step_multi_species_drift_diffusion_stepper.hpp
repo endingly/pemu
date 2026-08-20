@@ -8,19 +8,26 @@
 #include <pemu/physics/species.hpp>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace pemu::equation {
 
 class FixedStepMultiSpeciesDriftDiffusionStepper {
  public:
+  /**
+   * @brief Creates a fixed-step multi-species drift-diffusion stepper.
+   * @param pure_neumann_options Gauge and compatibility tolerances required
+   * when every potential boundary is Neumann.
+   */
   FixedStepMultiSpeciesDriftDiffusionStepper(
       const mesh::IMesh& mesh, const physics::SpeciesSet& species,
       double permittivity, double dt,
       boundary::BoundaryConditionSet potential_bc,
       std::vector<boundary::BoundaryConditionSet> species_bc,
       std::unique_ptr<linalg::ISolver> poisson_backend,
-      field::PlasmaFieldMetadata field_metadata = {});
+      field::PlasmaFieldMetadata field_metadata = {},
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt);
 
   void buildTransportSteppers();
 

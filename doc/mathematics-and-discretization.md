@@ -75,7 +75,17 @@ $$
 
    程序的 Neumann `value` 就是 $q_b$。$q_b>0$ 表示量从区域流出，$q_b=0$ 表示绝热/无通量边界。
 
-纯 Neumann 泊松问题只能确定 $\phi$ 的梯度；给解加任意常数仍是解，离散矩阵也因此有常数零空间。当前实现不会自动添加均值约束，所以稳态问题应至少有足以固定参考值的 Dirichlet 边界，或由调用方自行施加规范条件。
+纯 Neumann 泊松问题只能确定 $\phi$ 的梯度；给解加任意常数仍是解，离散矩阵也因此
+有常数零空间。此时构造 `PoissonSolver` 必须显式选择规范条件：`PinCellGauge` 固定
+一个参考单元的电势，`ZeroMeanGauge` 则通过拉格朗日乘子施加体积加权零均值约束。
+求解前还必须满足离散相容性
+
+$$
+\sum_P \rho_P V_P-\sum_{f\subset\partial\Omega}q_f A_f=0,
+$$
+
+也就是装配后 $\sum_P b_P=0$。求解器会按配置的绝对、相对容差检查该条件，不满足时
+返回 `SolverStatus::IncompatibleRhs`。
 
 ## 3. 泊松方程的有限体积装配
 
@@ -462,7 +472,8 @@ k_{\mathrm{ion}}=10^{-13}\,\mathrm{cm^3/s}.
 $$
 
 物种边界均取初始密度的 Dirichlet 条件；这是当前 Scharfetter--Gummel 实现仅支持
-Dirichlet 物种边界的明确限制。仿真运行到
+Dirichlet 物种边界的明确限制。这里新增的纯 Neumann 支持仅作用于泊松电势方程，
+不代表物种 Neumann 通量已经可用。仿真运行到
 
 $$
 t_{\mathrm{end}}=2\times10^{-7}\,\mathrm{s},

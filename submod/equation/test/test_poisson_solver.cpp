@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <pemu/equation/poisson_solver.hpp>
 #include <pemu/linalg/cholmod_solver.hpp>
+#include <pemu/linalg/umfpack_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
 namespace pemu::equation::test {
@@ -190,6 +191,105 @@ TEST_F(PoissonSolverTest, ReusesFactorizationAcrossSolves) {
   EXPECT_EQ(raw_backend->factorize_count, 1);
 
   EXPECT_EQ(raw_backend->solve_count, 2);
+}
+
+TEST_F(PoissonSolverTest, PureNeumannRequiresExplicitGauge) {
+  mesh::MoabMesh mesh(std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} /
+                      "two_quads.msh");
+  field::CellField<double> source(mesh, 0.0);
+  boundary::BoundaryConditionSet bc;
+  bc.setNeumann(1, 0.0);
+  bc.setNeumann(2, 0.0);
+  bc.setNeumann(3, 0.0);
+  bc.setNeumann(4, 0.0);
+
+  discretization::PoissonFvm poisson(mesh, source, 1.0, bc);
+
+  EXPECT_THROW(
+      equation::PoissonSolver(std::move(poisson),
+                              std::make_unique<linalg::CholmodSolver>()),
+      std::invalid_argument);
+}
+
+TEST_F(PoissonSolverTest, SolvesPureNeumannWithPinnedCell) {
+  mesh::MoabMesh mesh(std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} /
+                      "two_quads.msh");
+  field::CellField<double> source(mesh, 0.0);
+  boundary::BoundaryConditionSet bc;
+  bc.setNeumann(1, 1.0);
+  bc.setNeumann(2, -1.0);
+  bc.setNeumann(3, 0.0);
+  bc.setNeumann(4, 0.0);
+
+  discretization::PoissonFvm poisson(mesh, source, 1.0, bc);
+  field::CellField<double> phi(mesh, 0.0);
+  const auto reference_cell = mesh::CellId{0};
+  const double reference_value = mesh.cellCenter(reference_cell).x;
+  equation::PoissonSolver solver(
+      std::move(poisson), std::make_unique<linalg::CholmodSolver>(),
+      PureNeumannOptions{.gauge =
+                             PinCellGauge{reference_cell, reference_value}});
+
+  const auto result = solver.solve(phi);
+
+  ASSERT_TRUE(result.success());
+  for (mesh::CellId cell = 0; cell < mesh.numCells(); ++cell) {
+    EXPECT_NEAR(phi[cell], mesh.cellCenter(cell).x, 1e-12);
+  }
+}
+
+TEST_F(PoissonSolverTest, SolvesPureNeumannWithZeroMean) {
+  mesh::MoabMesh mesh(std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} /
+                      "two_quads.msh");
+  field::CellField<double> source(mesh, 0.0);
+  boundary::BoundaryConditionSet bc;
+  bc.setNeumann(1, 1.0);
+  bc.setNeumann(2, -1.0);
+  bc.setNeumann(3, 0.0);
+  bc.setNeumann(4, 0.0);
+
+  discretization::PoissonFvm poisson(mesh, source, 1.0, bc);
+  field::CellField<double> phi(mesh, 0.0);
+  equation::PoissonSolver solver(std::move(poisson),
+                                 std::make_unique<linalg::UmfpackSolver>(),
+                                 PureNeumannOptions{.gauge = ZeroMeanGauge{}});
+
+  const auto result = solver.solve(phi);
+
+  ASSERT_TRUE(result.success());
+  double weighted_sum = 0.0;
+  double total_volume = 0.0;
+  for (mesh::CellId cell = 0; cell < mesh.numCells(); ++cell) {
+    const double volume = mesh.cellVolume(cell);
+    weighted_sum += phi[cell] * volume;
+    total_volume += volume;
+    EXPECT_NEAR(phi[cell], mesh.cellCenter(cell).x - 1.0, 1e-12);
+  }
+  EXPECT_NEAR(weighted_sum / total_volume, 0.0, 1e-12);
+}
+
+TEST_F(PoissonSolverTest, RejectsIncompatiblePureNeumannRhs) {
+  mesh::MoabMesh mesh(std::filesystem::path{PEMU_MESH_TEST_DATA_DIR} /
+                      "two_quads.msh");
+  field::CellField<double> source(mesh, 1.0);
+  boundary::BoundaryConditionSet bc;
+  bc.setNeumann(1, 0.0);
+  bc.setNeumann(2, 0.0);
+  bc.setNeumann(3, 0.0);
+  bc.setNeumann(4, 0.0);
+
+  discretization::PoissonFvm poisson(mesh, source, 1.0, bc);
+  field::CellField<double> phi(mesh, 7.0);
+  equation::PoissonSolver solver(std::move(poisson),
+                                 std::make_unique<linalg::CholmodSolver>(),
+                                 PureNeumannOptions{.gauge = PinCellGauge{}});
+
+  const auto result = solver.solve(phi);
+
+  EXPECT_EQ(result.status, linalg::SolverStatus::IncompatibleRhs);
+  for (const double value : phi) {
+    EXPECT_DOUBLE_EQ(value, 7.0);
+  }
 }
 
 };  // namespace pemu::equation::test

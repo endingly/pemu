@@ -97,6 +97,8 @@
 | `AssemblesVolumeSource` | 源项按 `ρ_P V_P` 进入 RHS。 |
 | `AppliesNonZeroDirichletBoundary` | 左边界值 1 以正确的边界传导系数进入左单元 RHS。 |
 | `AppliesNeumannBoundaryFlux` | 正外向通量按 `-qA` 进入相邻单元 RHS。 |
+| `DetectsPureNeumannBoundary` | 全部边界均为 Neumann 时不报告 Dirichlet 面。 |
+| `DetectsMixedBoundaryAsHavingDirichlet` | 混合边界中能够识别至少一个 Dirichlet 面。 |
 | `MatrixIsSymmetric` | 混合边界下扩散离散矩阵仍为对称矩阵。 |
 | `IntergrationTest` | 装配的混合边界系统可被 CHOLMOD 分析、分解和求解。 |
 | `MeshFixturesHaveExpectedCellCounts` | 8/16/32/64 网格分别有 `n²` 单元。 |
@@ -115,6 +117,14 @@
 | `RejectsSolutionFieldFromDifferentMesh` | 解场与离散网格不同时拒绝求解。 |
 | `RejectsNullLinearSolver` | 方程求解器不能在没有线性后端时构造。 |
 | `ReusesFactorizationAcrossSolves` | 两次相同矩阵求解只分析/分解一次，但求解两次。 |
+| `PureNeumannRequiresExplicitGauge` | 纯 Neumann 问题未指定规范条件时拒绝构造。 |
+| `SolvesPureNeumannWithPinnedCell` | 固定参考单元后恢复线性解析解。 |
+| `SolvesPureNeumannWithZeroMean` | 拉格朗日乘子约束得到体积加权零均值线性解。 |
+| `RejectsIncompatiblePureNeumannRhs` | 总源项与边界通量不平衡时返回 `IncompatibleRhs`。 |
+
+多物种耦合入口另有 `PureNeumannGaugeIsAvailableFromCoupledStepper`，用于确认纯
+Neumann 规范配置可以从漂移扩散 stepper 传递到内部泊松求解器。物种边界本身仍只
+支持 Dirichlet。
 
 ## 瞬态扩散（`submod/equation/test/test_transient_diffusion_solver.cpp`）
 

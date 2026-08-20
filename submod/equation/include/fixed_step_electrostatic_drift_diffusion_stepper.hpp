@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -68,6 +69,11 @@ namespace pemu::equation {
  */
 class FixedStepElectrostaticDriftDiffusionStepper {
  public:
+  /**
+   * @brief Creates a two-species electrostatic drift-diffusion stepper.
+   * @param pure_neumann_options Gauge and compatibility tolerances required
+   * when every potential boundary is Neumann.
+   */
   FixedStepElectrostaticDriftDiffusionStepper(
       const mesh::IMesh& mesh, double permittivity, double dt,
       physics::ChargedSpeciesTransport electron,
@@ -75,7 +81,8 @@ class FixedStepElectrostaticDriftDiffusionStepper {
       const boundary::BoundaryConditionSet& potential_bc,
       const boundary::BoundaryConditionSet& electron_bc,
       const boundary::BoundaryConditionSet& ion_bc,
-      std::unique_ptr<linalg::ISolver> poisson_backend)
+      std::unique_ptr<linalg::ISolver> poisson_backend,
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt)
       : mesh_(&mesh),
         permittivity_(permittivity),
 
@@ -97,7 +104,8 @@ class FixedStepElectrostaticDriftDiffusionStepper {
 
         poisson_solver_(discretization::PoissonFvm(mesh, charge_density_,
                                                    permittivity, potential_bc),
-                        validateBackend(std::move(poisson_backend))),
+                        validateBackend(std::move(poisson_backend)),
+                        std::move(pure_neumann_options)),
 
         electron_stepper_(mesh, electron_drift_velocity_normal_,
                           electron.diffusivity, dt, electron_bc),

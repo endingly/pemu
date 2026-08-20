@@ -57,5 +57,27 @@ field + boundary + mesh + physics + linalg
 
 稳态 `PoissonSolver` 的分解复用意味着如需改变扩散系数、网格或边界条件，应调用
 `reset()` 或新建求解器。瞬态求解器同样假定每一步的矩阵不变，只有状态相关的 RHS
-改变。纯 Neumann 的稳态泊松问题存在常数零空间；项目没有为其额外施加均值约束，
-使用时应至少施加足够的 Dirichlet 约束或自行处理相容性与规范条件。
+改变。
+
+纯 Neumann 的稳态泊松问题存在常数零空间，构造 `PoissonSolver` 时必须显式传入
+`PureNeumannOptions`。可选择 `PinCellGauge` 固定一个参考单元，或选择
+`ZeroMeanGauge` 施加体积加权零均值约束。求解器会在每次重组 RHS 后检查离散相容性
+`sum(b) = 0`；不相容时返回 `SolverStatus::IncompatibleRhs`。`PinCellGauge` 保持系统
+对称正定，可使用 CHOLMOD；`ZeroMeanGauge` 会增加一个拉格朗日乘子并形成对称不定
+系统，应使用 UMFPACK 等支持一般稀疏矩阵的后端。
+
+两种策略可分别按以下方式传给直接求解器；漂移扩散 stepper 的最后一个构造参数也
+接受相同配置：
+
+```cpp
+PureNeumannOptions pin{
+    .gauge = PinCellGauge{.cell = reference_cell, .value = reference_phi}};
+
+PureNeumannOptions zero_mean{.gauge = ZeroMeanGauge{}};
+```
+
+规范条件目前按单个连通计算域设计；若网格包含多个互不连通的区域，每个连通分量都
+需要独立规范条件，当前接口不会自动添加这些额外约束。
+
+上述支持只针对泊松电势边界。物种输运的 Scharfetter--Gummel 边界目前仍只支持
+Dirichlet；物种 Neumann 边界不在当前支持范围内。

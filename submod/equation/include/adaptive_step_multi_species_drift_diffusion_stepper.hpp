@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <pemu/equation/detail/explicit_multi_species_drift_diffusion_operator.hpp>
 #include <pemu/equation/time_integration/adaptive_time_step_controller.hpp>
 #include <pemu/field/plasma_field_metadata.hpp>
@@ -13,6 +14,11 @@ namespace pemu::equation {
 
 class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
  public:
+  /**
+   * @brief Creates an adaptive multi-species drift-diffusion stepper.
+   * @param pure_neumann_options Gauge and compatibility tolerances required
+   * when every potential boundary is Neumann.
+   */
   AdaptiveStepMultiSpeciesDriftDiffusionStepper(
       const mesh::IMesh& mesh, const physics::SpeciesSet& species,
 
@@ -26,12 +32,14 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
 
       time_integration::AdaptiveTimeStepConfig time_step_config,
 
-      field::PlasmaFieldMetadata field_metadata = {})
+      field::PlasmaFieldMetadata field_metadata = {},
 
-      : transport_operator_(mesh, species, permittivity,
-                            std::move(potential_bc), std::move(species_bc),
-                            std::move(poisson_backend),
-                            std::move(field_metadata)),
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt)
+
+      : transport_operator_(
+            mesh, species, permittivity, std::move(potential_bc),
+            std::move(species_bc), std::move(poisson_backend),
+            std::move(field_metadata), std::move(pure_neumann_options)),
 
         controller_(time_step_config) {}
 

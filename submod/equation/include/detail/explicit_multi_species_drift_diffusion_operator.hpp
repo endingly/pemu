@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -33,6 +34,11 @@ namespace pemu::equation::detail {
 
 class ExplicitMultiSpeciesDriftDiffusionOperator {
  public:
+  /**
+   * @brief Creates the explicit multi-species transport operator.
+   * @param pure_neumann_options Gauge and compatibility tolerances required
+   * when every potential boundary is Neumann.
+   */
   ExplicitMultiSpeciesDriftDiffusionOperator(
       const mesh::IMesh& mesh, const physics::SpeciesSet& species,
       double permittivity,
@@ -43,7 +49,9 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
 
       std::unique_ptr<linalg::ISolver> poisson_backend,
 
-      field::PlasmaFieldMetadata field_metadata = {})
+      field::PlasmaFieldMetadata field_metadata = {},
+
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt)
 
       : mesh_(&mesh),
 
@@ -73,8 +81,8 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
 
         poisson_solver_(discretization::PoissonFvm(mesh, charge_density_,
                                                    permittivity, potential_bc_),
-
-                        validateBackend(std::move(poisson_backend))) {
+                        validateBackend(std::move(poisson_backend)),
+                        std::move(pure_neumann_options)) {
     if (permittivity_ <= 0.0) {
       throw std::invalid_argument("permittivity must be positive");
     }

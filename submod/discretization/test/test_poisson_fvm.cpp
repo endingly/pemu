@@ -131,6 +131,34 @@ TEST_F(PoissonFvmTest, AppliesNeumannBoundaryFlux) {
   }
 }
 
+TEST_F(PoissonFvmTest, DetectsPureNeumannBoundary) {
+  field::CellField<double> source(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+  bc.setNeumann(1, 0.0);
+  bc.setNeumann(2, 0.0);
+  bc.setNeumann(3, 0.0);
+  bc.setNeumann(4, 0.0);
+
+  PoissonFvm discretization(mesh_, source, 1.0, bc);
+
+  EXPECT_FALSE(discretization.hasDirichletBoundary());
+}
+
+TEST_F(PoissonFvmTest, DetectsMixedBoundaryAsHavingDirichlet) {
+  field::CellField<double> source(mesh_, 0.0);
+
+  boundary::BoundaryConditionSet bc;
+  bc.setNeumann(1, 0.0);
+  bc.setDirichlet(2, 0.0);
+  bc.setNeumann(3, 0.0);
+  bc.setNeumann(4, 0.0);
+
+  PoissonFvm discretization(mesh_, source, 1.0, bc);
+
+  EXPECT_TRUE(discretization.hasDirichletBoundary());
+}
+
 TEST_F(PoissonFvmTest, MatrixIsSymmetric) {
   field::CellField<double> source(mesh_, 0.0);
 

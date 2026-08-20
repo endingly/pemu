@@ -74,4 +74,23 @@ linalg::LinearSystem PoissonFvm::assemble() const {
   return system;
 }
 
+bool PoissonFvm::hasDirichletBoundary() const {
+  for (mesh::FaceId face = 0; face < mesh_->numFaces(); ++face) {
+    if (!mesh_->isBoundary(face)) {
+      continue;
+    }
+
+    const auto boundary_id = mesh_->boundaryId(face);
+    if (boundary_id == mesh::invalid_boundary) {
+      throw std::runtime_error("boundary face has no BoundaryId");
+    }
+
+    if (std::holds_alternative<boundary::Dirichlet>(bc_->at(boundary_id))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 }  // namespace pemu::discretization

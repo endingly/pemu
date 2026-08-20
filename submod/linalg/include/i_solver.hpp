@@ -16,6 +16,9 @@ enum class SolverStatus {
   Singular,
   NotPositiveDefinite,
 
+  /// The right-hand side violates a required equation compatibility condition.
+  IncompatibleRhs,
+
   NotAnalyzed,
   NotFactorized
 };

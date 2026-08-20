@@ -310,6 +310,35 @@ TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
   }
 }
 
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       PureNeumannGaugeIsAvailableFromCoupledStepper) {
+  physics::SpeciesSet species;
+  [[maybe_unused]] const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 3.0);
+
+  boundary::BoundaryConditionSet potential_bc;
+  potential_bc.setNeumann(mesh::BoundaryId{1}, 0.0);
+  potential_bc.setNeumann(mesh::BoundaryId{2}, 0.0);
+  potential_bc.setNeumann(mesh::BoundaryId{3}, 0.0);
+  potential_bc.setNeumann(mesh::BoundaryId{4}, 0.0);
+
+  auto species_bc = makeConstantSpeciesBoundaryConditions(species.size(), 3.0);
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
+      mesh_, species, 1.0, 0.01, std::move(potential_bc), std::move(species_bc),
+      std::make_unique<linalg::CholmodSolver>(), field::PlasmaFieldMetadata{},
+      PureNeumannOptions{.gauge = PinCellGauge{}});
+
+  const auto result = stepper.updateElectrostatics(density);
+
+  ASSERT_TRUE(result.success());
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(stepper.potential()[cell], 0.0, 1e-12);
+  }
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+    EXPECT_NEAR(stepper.electricFieldNormal()[face], 0.0, 1e-12);
+  }
+}
+
 // ============================================================
 // 2. The electrostatic solve must support more than two
 //    species.

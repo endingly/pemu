@@ -131,7 +131,8 @@ FixedStepMultiSpeciesDriftDiffusionStepper::
         boundary::BoundaryConditionSet potential_bc,
         std::vector<boundary::BoundaryConditionSet> species_bc,
         std::unique_ptr<linalg::ISolver> poisson_backend,
-        field::PlasmaFieldMetadata field_metadata)
+        field::PlasmaFieldMetadata field_metadata,
+        std::optional<PureNeumannOptions> pure_neumann_options)
     : mesh_(&mesh),
       species_(&species),
       permittivity_(permittivity),
@@ -146,7 +147,8 @@ FixedStepMultiSpeciesDriftDiffusionStepper::
                       field_metadata_.drift_velocity),
       poisson_solver_(discretization::PoissonFvm(mesh, charge_density_,
                                                  permittivity, potential_bc_),
-                      validateBackend(std::move(poisson_backend))) {
+                      validateBackend(std::move(poisson_backend)),
+                      std::move(pure_neumann_options)) {
   if (permittivity <= 0.0) {
     throw std::invalid_argument("permittivity must be positive");
   }
