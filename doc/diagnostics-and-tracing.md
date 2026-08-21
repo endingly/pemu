@@ -2,19 +2,20 @@
 
 ## 1. 模块职责
 
-`pemu::trace` 是一个独立的纯 interface 模块。它只定义结构化 trace 事件、严重级别、
-sink concept，以及少量通用 sink；不理解网格、场、物种、反应或求解器。
+`pemu::trace` 是一个独立的小型模块。它定义结构化 trace 事件、按模块分类的诊断事件、
+严重级别、sink concept，以及少量通用 sink；不理解网格、场、物种、反应或求解器。
 
 这个边界有意区分三类功能：
 
 - **log**：供人阅读的运行消息，例如一步开始、一步结束或求解失败；
-- **trace/diagnostics**：可由程序消费的结构化标量事件，例如当前步数、时间、残差和
-  自适应步长限制；
+- **trace**：可由程序消费的连续运行状态，例如当前步数、时间、残差和自适应步长限制；
+- **diagnostics**：需要关注的离散诊断，例如输入不合法、求解失败或数值状态异常；
 - **result output**：电势、密度、电场等大规模网格场的快照与文件格式写出。
 
-当前模块实现结构化 trace，并提供将事件格式化为日志行的最小 ostream sink；它不是
-通用日志系统。结果输出不应把整个场塞进 trace 属性；后续更适合建立独立的
-`pemu::output` 或 `pemu::io` 模块，由它负责快照频率、网格关联和 VTK/HDF5 等格式。
+当前模块用同一种结构化事件和 sink 实现 trace 与 diagnostics，并提供将事件格式化为
+日志行的最小 ostream sink；它不是通用日志系统。结果输出不应把整个场塞进事件属性；
+后续更适合建立独立的 `pemu::output` 或 `pemu::io` 模块，由它负责快照频率、网格关联
+和 VTK/HDF5 等格式。
 
 ## 2. 依赖方向
 
@@ -46,8 +47,11 @@ TimeStepProposal                                   过滤与落盘
 
 `TraceEvent` 包含：
 
-- `category`：事件来源，例如 `simulation.fixed_step`；
+- `kind`：`Trace` 表示运行轨迹，`Diagnostic` 表示需要关注的诊断；
+- `domain`：由 `DiagDomain` 表示的来源模块，例如 `simulation`；
+- `category`：模块内的子系统，例如 `fixed_step`；
 - `name`：事件名称，例如 `step.completed`；
+- `message`：可选的人类可读说明，普通 trace 通常为空；
 - `severity`：`Trace`、`Debug`、`Info`、`Warning`、`Error` 或 `Critical`；
 - `attributes`：由名称和强类型标量值构成的只读视图。
 
@@ -65,9 +69,42 @@ concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
 ```
 
 sink 必须是 `noexcept`，诊断失败不能改变数值推进的控制流。`OstreamTraceSink` 捕获流
-异常并记录自身的失败状态；自定义网络或文件 sink 也应在内部处理重试、丢弃或错误计数。
+异常并记录自身的失败状态；其实现使用 fmt 在内部缓冲区中完成整行格式化，再写入目标
+流。fmt 只出现在实现文件中，并作为 `pemu::trace` 的私有构建依赖，不会泄漏到公共头
+文件。自定义网络或文件 sink 也应在内部处理重试、丢弃或错误计数。
 
-## 4. 与仿真的耦合
+## 4. 结构化诊断模型
+
+`diag.hpp` 将诊断域定义集中在一处。`DiagDomain` 的枚举项直接采用模块名：
+`linalg`、`mesh`、`unit`、`field`、`trace`、`boundary`、`discretization`、`physics`、
+`equation` 和 `simulation`。`diagDomainName()` 返回相同的稳定字符串，使 sink 可以按
+模块过滤或生成机器可读记录。
+
+诊断不定义第二种事件或第二套 sink，而是使用 `EventKind::Diagnostic` 标记
+`TraceEvent`。其中 `category` 和 `name` 合起来构成稳定诊断码，例如：
+
+```cpp
+#include <pemu/trace/ostream_trace_sink.hpp>
+
+pemu::trace::TraceEvent diagnostic{
+    .kind = pemu::trace::EventKind::Diagnostic,
+    .domain = pemu::trace::DiagDomain::equation,
+    .category = "poisson",
+    .name = "not_converged",
+    .message = "linear solve did not converge",
+    .severity = pemu::trace::Severity::Warning,
+};
+
+pemu::trace::OstreamTraceSink sink(std::clog);
+sink(diagnostic);
+```
+
+它仍通过 `TraceSink` 输出为
+`[warning] equation.poisson.not_converged: linear solve did not converge`。应用可统一按照
+`kind`、`domain` 和 `severity` 过滤，不需要管理两套 sink，也不会产生不一致的级别、
+属性和输出策略。
+
+## 5. 与仿真的耦合
 
 固定步长和自适应仿真都增加了第二个模板参数 `TraceSink`，默认值为
 `pemu::trace::NullTraceSink`。sink 由构造函数注入并按值保存；有共享状态需求时，sink
@@ -113,21 +150,24 @@ simulation.run();
 反应率和源项仍是用于本次推进的 $k$ 层工作量。trace 目前只输出标量状态，因此没有把
 二者误包装成同一时刻的场快照。
 
-## 5. 中间场诊断的扩展方式
+## 6. 中间场诊断的扩展方式
 
 若以后需要追踪每步的粒子总数、最小密度、最大电场或电荷守恒误差，应增加显式的
 diagnostic probe：probe 在 simulation 的阶段边界读取只读场，计算少量标量，再通过
-同一个 `TraceEvent` 输出。因为场扫描是 $O(N)$ 操作，它必须是选择性启用的，不能为了
-空 `NullTraceSink` 每一步无条件计算。
+`EventKind::Trace` 事件输出连续观测值；发现异常时则生成 `EventKind::Diagnostic`
+事件。因为场扫描是 $O(N)$ 操作，它必须是选择性启用的，不能为了空 `NullTraceSink`
+每一步无条件计算。
 
 大规模场结果则走独立 output 管线。建议由 simulation 在“初始状态”“每隔若干步”及
 “终止状态”提供一致的 snapshot 观察点，output 模块负责深拷贝或同步写出。日志过滤、
 结果采样频率和数值推进步长应彼此独立。
 
-## 6. 当前限制
+## 7. 当前限制
 
 - `OstreamTraceSink` 是同步输出，逐步打印大量事件会影响长时间仿真的吞吐；生产环境
   应使用带级别过滤、步数抽样或后台队列的自定义 sink；
+- 当前已经提供统一的诊断事件模型，但数值模块尚未主动生成 `EventKind::Diagnostic`
+  事件；
 - 当前显式记录 `SolverResult` 失败；反应 evaluator 或输运更新直接抛出的异常仍原样
   向上传播，尚未额外生成异常事件；
 - 当前没有全局 logger、运行时 sink 注册表或跨线程排序，避免在单线程数值原型阶段

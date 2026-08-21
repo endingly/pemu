@@ -2,10 +2,10 @@
 
 #include <pemu/equation/adaptive_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/equation/time_integration/adaptive_time_step_controller.hpp>
-#include <pemu/trace/trace.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_time_clock.hpp>
+#include <pemu/trace/trace.hpp>
 
 #include <array>
 #include <cstddef>
@@ -342,7 +342,7 @@ class AdaptiveStepPlasmaSimulation {
                     pemu::trace::Severity severity) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"time", clock_.time()},
         pemu::trace::TraceAttribute{"end_time", clock_.endTime()},
     };
@@ -352,7 +352,7 @@ class AdaptiveStepPlasmaSimulation {
   void emitStepStarted() noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"time", clock_.time()},
         pemu::trace::TraceAttribute{"remaining_time", clock_.remainingTime()},
     };
@@ -363,12 +363,12 @@ class AdaptiveStepPlasmaSimulation {
                         const linalg::SolverResult& result) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"solver_status",
-                                  static_cast<std::int64_t>(result.status)},
+                                    static_cast<std::int64_t>(result.status)},
         pemu::trace::TraceAttribute{"residual_norm", result.residual_norm},
         pemu::trace::TraceAttribute{"relative_residual",
-                                  result.relative_residual},
+                                    result.relative_residual},
     };
     emitTrace(name, severity, attributes);
   }
@@ -377,9 +377,9 @@ class AdaptiveStepPlasmaSimulation {
                               std::size_t field_count) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"field_count",
-                                  static_cast<std::uint64_t>(field_count)},
+                                    static_cast<std::uint64_t>(field_count)},
     };
     emitTrace(name, pemu::trace::Severity::Trace, attributes);
   }
@@ -387,12 +387,14 @@ class AdaptiveStepPlasmaSimulation {
   void emitTimeStepSelected(const TimeStepProposal& proposal) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"dt", proposal.dt},
-        pemu::trace::TraceAttribute{"transport_limit", proposal.transport_limit},
+        pemu::trace::TraceAttribute{"transport_limit",
+                                    proposal.transport_limit},
         pemu::trace::TraceAttribute{"positivity_limit",
-                                  proposal.positivity_limit},
-        pemu::trace::TraceAttribute{"stability_limit", proposal.stability_limit},
+                                    proposal.positivity_limit},
+        pemu::trace::TraceAttribute{"stability_limit",
+                                    proposal.stability_limit},
     };
     emitTrace("timestep.selected", pemu::trace::Severity::Debug, attributes);
   }
@@ -401,11 +403,11 @@ class AdaptiveStepPlasmaSimulation {
                          const linalg::SolverResult& result) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"time", clock_.time()},
         pemu::trace::TraceAttribute{"dt", dt},
         pemu::trace::TraceAttribute{"relative_residual",
-                                  result.relative_residual},
+                                    result.relative_residual},
     };
     emitTrace("step.completed", pemu::trace::Severity::Info, attributes);
   }
@@ -414,7 +416,8 @@ class AdaptiveStepPlasmaSimulation {
   void emitTrace(
       std::string_view name, pemu::trace::Severity severity,
       const std::array<pemu::trace::TraceAttribute, N>& attributes) noexcept {
-    trace_sink_({.category = "simulation.adaptive_step",
+    trace_sink_({.domain = pemu::trace::DiagDomain::simulation,
+                 .category = "adaptive_step",
                  .name = name,
                  .severity = severity,
                  .attributes = attributes});

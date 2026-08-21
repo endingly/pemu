@@ -1,12 +1,14 @@
-# file(GLOB_RECURSE trace_srcs src/*.cpp)
-add_library(trace INTERFACE)
+file(GLOB_RECURSE trace_srcs CONFIGURE_DEPENDS src/*.cpp)
+add_library(trace ${trace_srcs})
 add_library(pemu::trace ALIAS trace)
-
-pemu_register_interface_headers(
+pemu_register_public_headers(
     trace
     trace
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
+find_package(magic_enum CONFIG REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+target_link_libraries(trace PRIVATE magic_enum::magic_enum fmt::fmt)
 
 if(BUILD_TESTING)
     file(GLOB_RECURSE test_trace_srcs test/*.cpp)

@@ -1,10 +1,10 @@
 #pragma once
 
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
-#include <pemu/trace/trace.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
+#include <pemu/trace/trace.hpp>
 
 #include <algorithm>
 #include <array>
@@ -328,7 +328,7 @@ class FixedStepPlasmaSimulation {
                     pemu::trace::Severity severity) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"time", clock_.time()},
         pemu::trace::TraceAttribute{"end_time", clock_.endTime()},
     };
@@ -338,7 +338,7 @@ class FixedStepPlasmaSimulation {
   void emitStepStarted() noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"time", clock_.time()},
         pemu::trace::TraceAttribute{"dt", clock_.timeStep()},
     };
@@ -349,12 +349,12 @@ class FixedStepPlasmaSimulation {
                         const linalg::SolverResult& result) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"solver_status",
-                                  static_cast<std::int64_t>(result.status)},
+                                    static_cast<std::int64_t>(result.status)},
         pemu::trace::TraceAttribute{"residual_norm", result.residual_norm},
         pemu::trace::TraceAttribute{"relative_residual",
-                                  result.relative_residual},
+                                    result.relative_residual},
     };
     emitTrace(name, severity, attributes);
   }
@@ -363,9 +363,9 @@ class FixedStepPlasmaSimulation {
                               std::size_t field_count) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"field_count",
-                                  static_cast<std::uint64_t>(field_count)},
+                                    static_cast<std::uint64_t>(field_count)},
     };
     emitTrace(name, pemu::trace::Severity::Trace, attributes);
   }
@@ -373,11 +373,11 @@ class FixedStepPlasmaSimulation {
   void emitStepCompleted(const linalg::SolverResult& result) noexcept {
     const std::array attributes{
         pemu::trace::TraceAttribute{"step",
-                                  static_cast<std::uint64_t>(clock_.step())},
+                                    static_cast<std::uint64_t>(clock_.step())},
         pemu::trace::TraceAttribute{"time", clock_.time()},
         pemu::trace::TraceAttribute{"dt", clock_.timeStep()},
         pemu::trace::TraceAttribute{"relative_residual",
-                                  result.relative_residual},
+                                    result.relative_residual},
     };
     emitTrace("step.completed", pemu::trace::Severity::Info, attributes);
   }
@@ -386,7 +386,8 @@ class FixedStepPlasmaSimulation {
   void emitTrace(
       std::string_view name, pemu::trace::Severity severity,
       const std::array<pemu::trace::TraceAttribute, N>& attributes) noexcept {
-    trace_sink_({.category = "simulation.fixed_step",
+    trace_sink_({.domain = pemu::trace::DiagDomain::simulation,
+                 .category = "fixed_step",
                  .name = name,
                  .severity = severity,
                  .attributes = attributes});

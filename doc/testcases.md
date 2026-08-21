@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 171 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 181 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -10,6 +10,9 @@
 | --- | --- |
 | `TraceSinkTest.NullSinkAcceptsStructuredEvents` | 默认空 sink 满足 trace concept，能同步接受结构化事件且不产生副作用。 |
 | `TraceSinkTest.OstreamSinkFormatsOneStructuredEventPerLine` | ostream sink 将严重级别、类别、事件名和强类型属性稳定地格式化为单行，并报告流状态。 |
+| `DiagDomainTest.NamesMatchModuleNames` | 每个 `DiagDomain` 都稳定映射为对应的 pemu 模块名，可供过滤和机器处理使用。 |
+| `TraceSinkTest.NullSinkAcceptsStructuredDiagnostics` | 同一个默认空 trace sink 能无副作用地接受标记为 diagnostic 的结构化事件。 |
+| `TraceSinkTest.OstreamSinkFormatsDiagnosticEvent` | 同一个 ostream trace sink 按严重级别、模块域、类别、名称、消息和属性格式化诊断事件。 |
 
 ## 边界条件（`submod/boundary/test/test_boundary.cpp`）
 
@@ -88,6 +91,17 @@
 | `ConstantStateHasZeroAdvectionDivergence` | 常值状态与相容入流在常速度下无虚假散度。 |
 | `AdvectionFluxIsGloballyConservative` | 纯内面对流的全域积分散度为零。 |
 | `UpwindFluxRejectsDifferentMeshes` | 迎风算子的状态、速度、通量必须属于同一网格。 |
+| `BernoulliTest.ValueAtZeroIsOne` | Scharfetter–Gummel 离散使用的 Bernoulli 函数满足 $B(0)=1$。 |
+| `BernoulliTest.MatchesKnownValues` | $B(1)$ 与 $B(-1)$ 符合高精度参考值。 |
+| `BernoulliTest.SatisfiesDifferenceIdentity` | 在正负及不同量级参数上满足 $B(-x)-B(x)=x$。 |
+| `BernoulliTest.IsStableNearZero` | $x\to0$ 时采用稳定计算，并符合 $B(x)=1-x/2+O(x^2)$。 |
+| `BernoulliTest.HasCorrectLargeArgumentLimits` | 大正参数下 $B(x)\to0$，大负参数下 $B(x)\sim-x$，且计算不溢出。 |
+| `OperatorTest.ScharfetterGummelReducesToDiffusionAtZeroVelocity` | 速度为零时，Scharfetter–Gummel 内面通量退化为中心扩散通量。 |
+| `OperatorTest.ScharfetterGummelApproachesOwnerUpwindForStrongPositiveDrift` | 强正漂移极限取 owner 状态，趋近正向迎风通量。 |
+| `OperatorTest.ScharfetterGummelApproachesNeighborUpwindForStrongNegativeDrift` | 强负漂移极限取 neighbor 状态，趋近负向迎风通量。 |
+| `OperatorTest.ScharfetterGummelPreservesConstantStateFlux` | 常值状态与相容边界下仅保留物理对流通量 $v_nu$。 |
+| `OperatorTest.ConstantSgFluxHasZeroDivergence` | 常值状态的 Scharfetter–Gummel 通量不会产生虚假离散散度。 |
+| `OperatorTest.ScharfetterGummelExactlyPreservesExponentialEquilibrium` | 对满足相邻单元指数平衡关系的状态，离散漂移扩散通量精确为零。 |
 
 ## 泊松有限体积装配（`submod/discretization/test/test_poisson_fvm*.cpp`）
 
@@ -121,10 +135,6 @@
 | `SolvesPureNeumannWithPinnedCell` | 固定参考单元后恢复线性解析解。 |
 | `SolvesPureNeumannWithZeroMean` | 拉格朗日乘子约束得到体积加权零均值线性解。 |
 | `RejectsIncompatiblePureNeumannRhs` | 总源项与边界通量不平衡时返回 `IncompatibleRhs`。 |
-
-多物种耦合入口另有 `PureNeumannGaugeIsAvailableFromCoupledStepper`，用于确认纯
-Neumann 规范配置可以从漂移扩散 stepper 传递到内部泊松求解器。物种边界本身仍只
-支持 Dirichlet。
 
 ## 瞬态扩散（`submod/equation/test/test_transient_diffusion_solver.cpp`）
 
@@ -214,6 +224,7 @@ Neumann 规范配置可以从漂移扩散 stepper 传递到内部泊松求解器
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsWrongSpeciesFieldCount` | 场数组物种数必须与 `SpeciesSet` 一致。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsFieldsFromDifferentMesh` | 多物种场不能跨网格传给推进器。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.MatchesLegacyTwoSpeciesSolver` | 更一般的固定多物种实现与固定双物种实现给出相同结果。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.PureNeumannGaugeIsAvailableFromCoupledStepper` | 纯 Neumann 规范配置可由多物种漂移扩散推进器传入内部泊松求解器，并得到零电势、零电场的中性均匀解。 |
 | `AdaptiveTimeStepControllerTest.AppliesSafetyAndGrowthLimits` | 时间步提议同时服从安全系数、稳定性限制和相对上一时刻的增长上限。 |
 | `AdaptiveTimeStepControllerTest.TruncatesFinalStepToRemainingTime` | 时间步提议会被剩余时间截断，保证最终时刻精确对齐。 |
 | `AdaptiveTimeStepControllerTest.RejectsNoPositiveAdmissibleTimeStep` | 稳定性或正性限制为零时拒绝不存在正步长的推进。 |

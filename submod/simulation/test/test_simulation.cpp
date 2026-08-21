@@ -351,12 +351,16 @@ struct NoReactionEvaluator {
 struct RecordingTraceSink {
   std::vector<std::string>* names{};
   std::vector<std::string>* categories{};
+  std::vector<pemu::trace::DiagDomain>* domains{};
+  std::vector<pemu::trace::EventKind>* kinds{};
   std::vector<double>* selected_time_steps{};
   std::vector<double>* completed_times{};
 
   void operator()(const pemu::trace::TraceEvent& event) const noexcept {
     names->emplace_back(event.name);
     categories->emplace_back(event.category);
+    domains->push_back(event.domain);
+    kinds->push_back(event.kind);
 
     for (const auto& attribute : event.attributes) {
       const auto* value = std::get_if<double>(&attribute.value);
@@ -926,13 +930,19 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   std::vector<std::string> names;
   std::vector<std::string> categories;
+  std::vector<pemu::trace::DiagDomain> domains;
+  std::vector<pemu::trace::EventKind> kinds;
   std::vector<double> selected_time_steps;
   std::vector<double> completed_times;
   names.reserve(12);
   categories.reserve(12);
+  domains.reserve(12);
+  kinds.reserve(12);
   completed_times.reserve(2);
   const RecordingTraceSink sink{.names = &names,
                                 .categories = &categories,
+                                .domains = &domains,
+                                .kinds = &kinds,
                                 .selected_time_steps = &selected_time_steps,
                                 .completed_times = &completed_times};
 
@@ -958,7 +968,13 @@ TEST_F(FixedStepPlasmaSimulationTest,
   };
   EXPECT_EQ(names, expected_names);
   EXPECT_TRUE(std::ranges::all_of(categories, [](const std::string& category) {
-    return category == "simulation.fixed_step";
+    return category == "fixed_step";
+  }));
+  EXPECT_TRUE(std::ranges::all_of(domains, [](pemu::trace::DiagDomain domain) {
+    return domain == pemu::trace::DiagDomain::simulation;
+  }));
+  EXPECT_TRUE(std::ranges::all_of(kinds, [](pemu::trace::EventKind kind) {
+    return kind == pemu::trace::EventKind::Trace;
   }));
   EXPECT_TRUE(selected_time_steps.empty());
   ASSERT_EQ(completed_times.size(), 2u);
@@ -1194,14 +1210,20 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
 
   std::vector<std::string> names;
   std::vector<std::string> categories;
+  std::vector<pemu::trace::DiagDomain> domains;
+  std::vector<pemu::trace::EventKind> kinds;
   std::vector<double> selected_time_steps;
   std::vector<double> completed_times;
   names.reserve(20);
   categories.reserve(20);
+  domains.reserve(20);
+  kinds.reserve(20);
   selected_time_steps.reserve(3);
   completed_times.reserve(3);
   const RecordingTraceSink sink{.names = &names,
                                 .categories = &categories,
+                                .domains = &domains,
+                                .kinds = &kinds,
                                 .selected_time_steps = &selected_time_steps,
                                 .completed_times = &completed_times};
 
@@ -1235,7 +1257,13 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   };
   EXPECT_EQ(names, expected_names);
   EXPECT_TRUE(std::ranges::all_of(categories, [](const std::string& category) {
-    return category == "simulation.adaptive_step";
+    return category == "adaptive_step";
+  }));
+  EXPECT_TRUE(std::ranges::all_of(domains, [](pemu::trace::DiagDomain domain) {
+    return domain == pemu::trace::DiagDomain::simulation;
+  }));
+  EXPECT_TRUE(std::ranges::all_of(kinds, [](pemu::trace::EventKind kind) {
+    return kind == pemu::trace::EventKind::Trace;
   }));
   ASSERT_EQ(selected_time_steps.size(), 3u);
   EXPECT_NEAR(selected_time_steps[0], 0.04, 1e-14);
