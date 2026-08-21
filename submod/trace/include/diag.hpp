@@ -20,6 +20,46 @@ enum class DiagDomain : std::uint8_t {
   simulation,
 };
 
-[[nodiscard]] std::string_view diagDomainName(DiagDomain domain) noexcept;
+}  // namespace pemu::trace
+
+namespace pemu {
+
+[[nodiscard]] constexpr std::string_view to_string(
+    trace::DiagDomain domain) noexcept {
+  switch (domain) {
+    case trace::DiagDomain::linalg:
+      return "linalg";
+    case trace::DiagDomain::mesh:
+      return "mesh";
+    case trace::DiagDomain::unit:
+      return "unit";
+    case trace::DiagDomain::field:
+      return "field";
+    case trace::DiagDomain::trace:
+      return "trace";
+    case trace::DiagDomain::boundary:
+      return "boundary";
+    case trace::DiagDomain::discretization:
+      return "discretization";
+    case trace::DiagDomain::physics:
+      return "physics";
+    case trace::DiagDomain::equation:
+      return "equation";
+    case trace::DiagDomain::simulation:
+      return "simulation";
+  }
+  return "Unknown";
+}
+
+}  // namespace pemu
+
+namespace pemu::trace {
+
+// Compatibility spelling for existing callers. New enum-to-text conversions
+// should use pemu::to_string(enum_value).
+[[nodiscard]] constexpr std::string_view diagDomainName(
+    DiagDomain domain) noexcept {
+  return pemu::to_string(domain);
+}
 
 }  // namespace pemu::trace

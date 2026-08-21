@@ -6,9 +6,25 @@
 
 #include <array>
 #include <sstream>
+#include <streambuf>
 #include <utility>
 
 namespace pemu::trace::test {
+
+namespace {
+
+class FlushCountingBuffer final : public std::stringbuf {
+ public:
+  int flush_count{};
+
+ protected:
+  int sync() override {
+    ++flush_count;
+    return std::stringbuf::sync();
+  }
+};
+
+}  // namespace
 
 TEST(TraceSinkTest, NullSinkAcceptsStructuredEvents) {
   const std::array attributes{
@@ -27,13 +43,14 @@ TEST(TraceSinkTest, NullSinkAcceptsStructuredEvents) {
   EXPECT_NO_THROW(sink(event));
 }
 
-TEST(TraceSinkTest, OstreamSinkFormatsOneStructuredEventPerLine) {
+TEST(TraceSinkTest, OstreamSinkFormatsTabularStructuredEvents) {
   const std::array attributes{
       TraceAttribute{"step", std::uint64_t{3}},
       TraceAttribute{"time", 0.25},
       TraceAttribute{"finished", true},
       TraceAttribute{"offset", std::int64_t{-2}},
       TraceAttribute{"state", std::string_view{"running"}},
+      TraceAttribute{"solver_status", std::string_view{"PatternAnalysisFailed"}},
   };
   const TraceEvent event{
       .domain = DiagDomain::simulation,
@@ -47,13 +64,44 @@ TEST(TraceSinkTest, OstreamSinkFormatsOneStructuredEventPerLine) {
 
   sink(event);
 
-  EXPECT_EQ(output.str(),
-            "[Info] simulation.fixed_step.step.completed step=3 time=0.25 "
-            "finished=1 offset=-2 state=running\n");
+  EXPECT_NE(output.str().find("LEVEL    | EVENT"), std::string::npos);
+  EXPECT_NE(output.str().find("Info     | simulation.fixed_step.step.completed"),
+            std::string::npos);
+  EXPECT_NE(output.str().find("|    3 |            0.25"), std::string::npos);
+  EXPECT_NE(output.str().find("finished=true; offset=-2; state=running"),
+            std::string::npos);
+  EXPECT_NE(output.str().find("|    PatternAnalysisFailed |"),
+            std::string::npos);
   EXPECT_FALSE(sink.failed());
 }
 
-TEST(DiagDomainTest, NamesMatchModuleNames) {
+TEST(TraceSinkTest, OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd) {
+  FlushCountingBuffer buffer;
+  std::ostream output(&buffer);
+  OstreamTraceSink sink(output);
+  const TraceEvent step_completed{
+      .domain = DiagDomain::simulation,
+      .category = "adaptive_step",
+      .name = "step.completed",
+  };
+  const TraceEvent run_completed{
+      .domain = DiagDomain::simulation,
+      .category = "adaptive_step",
+      .name = "run.completed",
+  };
+
+  sink(step_completed);
+  EXPECT_EQ(buffer.flush_count, 0);
+  sink(step_completed);
+  EXPECT_EQ(buffer.flush_count, 1);
+  sink(step_completed);
+  EXPECT_EQ(buffer.flush_count, 1);
+  sink(run_completed);
+  EXPECT_EQ(buffer.flush_count, 2);
+  EXPECT_FALSE(sink.failed());
+}
+
+TEST(EnumStringTest, DomainsAndSeveritiesHaveStableNames) {
   constexpr std::array domains{
       std::pair{DiagDomain::linalg, "linalg"},
       std::pair{DiagDomain::mesh, "mesh"},
@@ -68,7 +116,20 @@ TEST(DiagDomainTest, NamesMatchModuleNames) {
   };
 
   for (const auto& [domain, expected_name] : domains) {
+    EXPECT_EQ(pemu::to_string(domain), expected_name);
     EXPECT_EQ(diagDomainName(domain), expected_name);
+  }
+
+  constexpr std::array severities{
+      std::pair{Severity::Trace, "Trace"},
+      std::pair{Severity::Debug, "Debug"},
+      std::pair{Severity::Info, "Info"},
+      std::pair{Severity::Warning, "Warning"},
+      std::pair{Severity::Error, "Error"},
+      std::pair{Severity::Critical, "Critical"},
+  };
+  for (const auto& [severity, expected_name] : severities) {
+    EXPECT_EQ(pemu::to_string(severity), expected_name);
   }
 }
 
@@ -105,9 +166,11 @@ TEST(TraceSinkTest, OstreamSinkFormatsDiagnosticEvent) {
 
   sink(diagnostic);
 
-  EXPECT_EQ(output.str(),
-            "[Warning] equation.poisson.not_converged: linear solve did not "
-            "converge residual=1.25e-06 iterations=7\n");
+  EXPECT_NE(output.str().find("Warning  | equation.poisson.not_converged"),
+            std::string::npos);
+  EXPECT_NE(output.str().find("linear solve did not converge; residual=1.25e-06; "
+                               "iterations=7"),
+            std::string::npos);
   EXPECT_FALSE(sink.failed());
 }
 

@@ -9,7 +9,6 @@
     "mp-units",
     "suitesparse-umfpack",
     "eigen3",
-    "moab",
-    "magic-enum"
+    "moab"
   ]
 }

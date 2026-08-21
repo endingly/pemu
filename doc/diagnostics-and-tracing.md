@@ -70,9 +70,17 @@ concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
 ```
 
 sink 必须是 `noexcept`，诊断失败不能改变数值推进的控制流。`OstreamTraceSink` 捕获流
-异常并记录自身的失败状态；其实现使用 fmt 在内部缓冲区中完成整行格式化，再写入目标
-流。fmt 只出现在实现文件中，并作为 `pemu::trace` 的私有构建依赖，不会泄漏到公共头
-文件。自定义网络或文件 sink 也应在内部处理重试、丢弃或错误计数。
+异常并记录自身的失败状态；其实现使用 fmt 在内部缓冲区中完成格式化，再写入目标流。
+它在首次事件前输出一次表头，将 `step`、`time`、`dt`、`end_time`、求解器状态及残差
+放入对齐列；一个事件缺少的属性对应空白单元格，其他属性和诊断消息进入 `DETAILS` 列。
+为支持长时间仿真的 `tail -f` 预览，文件流默认在每两个 simulation 时间步完成后刷新；
+`run.completed` 或 `run.failed` 会无条件刷新尚未刷新的尾部事件。此策略只刷新 C++ 流
+缓冲区以便观察，不提供断电耐久性的 `fsync` 保证。
+所有枚举的文本转换统一使用 `pemu::to_string()`；求解状态因此显示稳定字符串（如
+`Success`、`SolveFailed`），
+不输出 `enum class SolverStatus` 的底层整数。
+fmt 只出现在实现文件中，并作为 `pemu::trace` 的私有构建依赖，不会泄漏到公共头文件。
+自定义网络或文件 sink 也应在内部处理重试、丢弃或错误计数。
 
 ## 4. 结构化诊断模型
 

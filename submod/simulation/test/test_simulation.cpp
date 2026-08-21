@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -499,6 +500,63 @@ class DiagnosticFailingSolver final : public linalg::ISolver {
  private:
   bool analyzed_{false};
   bool factorized_{false};
+};
+
+// Runs a real CHOLMOD solve before injecting a failure.  This makes the
+// 64x64 integration test exercise one complete physical timestep before it
+// verifies that the lower-level linalg diagnostic survives simulation's
+// failure handling.
+class FailAfterSuccessfulCholmodSolves final : public linalg::ISolver {
+ public:
+  explicit FailAfterSuccessfulCholmodSolves(
+      std::size_t successful_solves_before_failure)
+      : successful_solves_before_failure_(successful_solves_before_failure) {}
+
+  linalg::SolverResult analyzePattern(const linalg::SparseMatrix& matrix) override {
+    return backend_.analyzePattern(matrix);
+  }
+
+  linalg::SolverResult factorize(const linalg::SparseMatrix& matrix) override {
+    return backend_.factorize(matrix);
+  }
+
+  linalg::SolverResult solve(linalg::ConstVectorRef right_hand_side,
+                             linalg::VectorRef solution) override {
+    if (successful_solve_count_ >= successful_solves_before_failure_) {
+      return {
+          .status = linalg::SolverStatus::SolveFailed,
+          .residual_norm = 2.5,
+          .relative_residual = 0.25,
+          .diagnostic = trace::makeDiagnosticEvent(
+              trace::DiagDomain::linalg, "test_backend", "solve.failed",
+              "injected failure after successful CHOLMOD solve"),
+      };
+    }
+
+    auto result = backend_.solve(right_hand_side, solution);
+    if (result.success()) {
+      ++successful_solve_count_;
+    }
+    return result;
+  }
+
+  void reset() override {
+    backend_.reset();
+    successful_solve_count_ = 0;
+  }
+
+  [[nodiscard]] bool isAnalyzed() const noexcept override {
+    return backend_.isAnalyzed();
+  }
+
+  [[nodiscard]] bool isFactorized() const noexcept override {
+    return backend_.isFactorized();
+  }
+
+ private:
+  linalg::CholmodSolver backend_;
+  std::size_t successful_solves_before_failure_{};
+  std::size_t successful_solve_count_{};
 };
 
 }  // namespace
@@ -1042,9 +1100,10 @@ TEST_F(FixedStepPlasmaSimulationTest,
   const auto result = simulation.advanceOneStep();
 
   EXPECT_EQ(result.status, linalg::SolverStatus::SolveFailed);
-  EXPECT_NE(output.str().find(
-                "[Error] linalg.test_backend.solve.failed: injected linear "
-                "solve failure step=0"),
+  EXPECT_NE(output.str().find("Error    | linalg.test_backend.solve.failed"),
+            std::string::npos)
+      << output.str();
+  EXPECT_NE(output.str().find("injected linear solve failure"),
             std::string::npos)
       << output.str();
   EXPECT_LT(output.str().find("linalg.test_backend.solve.failed"),
@@ -1365,9 +1424,10 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   const auto result = simulation.advanceOneStep();
 
   EXPECT_EQ(result.status, linalg::SolverStatus::SolveFailed);
-  EXPECT_NE(output.str().find(
-                "[Error] linalg.test_backend.solve.failed: injected linear "
-                "solve failure step=0"),
+  EXPECT_NE(output.str().find("Error    | linalg.test_backend.solve.failed"),
+            std::string::npos)
+      << output.str();
+  EXPECT_NE(output.str().find("injected linear solve failure"),
             std::string::npos)
       << output.str();
   EXPECT_LT(output.str().find("linalg.test_backend.solve.failed"),
@@ -1759,8 +1819,18 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
           neutral_density.numerical_value_in(number_density_unit),
       .rate_coefficient = ionization_rate_coefficient.numerical_value_in(
           ionization_coefficient_unit)};
-  AdaptiveStepPlasmaSimulation simulation(
-      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s));
+  // Keep the multi-step trace out of the test runner's terminal output.  The
+  // path is intentionally relative to the process working directory so a
+  // direct invocation writes ./test.log.
+  std::ofstream trace_output("test.log");
+  ASSERT_TRUE(trace_output.is_open());
+  trace::OstreamTraceSink trace_sink(trace_output);
+  AdaptiveStepPlasmaSimulation simulation(density,
+                                          reactions,
+                                          transport,
+                                          evaluator,
+                                          AdaptiveTimeClock(end_time_s),
+                                          trace_sink);
 
   simulation.run();
 
@@ -1802,6 +1872,123 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
     EXPECT_GT(simulation.source()[electron][cell], 0.0);
     EXPECT_GT(simulation.source()[ion][cell], 0.0);
   }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
+       ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  constexpr auto number_density_unit = one / cubic(cm);
+  constexpr auto mobility_unit = square(cm) / (V * s);
+  constexpr auto diffusivity_unit = square(cm) / s;
+  constexpr auto ionization_coefficient_unit = cubic(cm) / s;
+
+  // Keep this physical configuration equal to the successful parallel-plate
+  // integration test above.  The only changed component is the injected
+  // linear-solver backend.
+  constexpr auto left_potential = 0.0 * V;
+  constexpr auto right_potential = 400.0 * V;
+  constexpr auto elementary_charge = 1.602176634e-19 * C;
+  constexpr auto vacuum_permittivity = 8.8541878128e-14 * F / cm;
+  constexpr auto initial_density = 1.0e6 * number_density_unit;
+  constexpr auto electron_mobility = 1.0e3 * mobility_unit;
+  constexpr auto ion_mobility = 1.5 * mobility_unit;
+  constexpr auto electron_diffusivity = 1.0e2 * diffusivity_unit;
+  constexpr auto ion_diffusivity = 4.0e-2 * diffusivity_unit;
+  constexpr auto neutral_density = 2.5e19 * number_density_unit;
+  constexpr auto ionization_rate_coefficient =
+      1.0e-13 * ionization_coefficient_unit;
+  constexpr auto end_time = 2.0e-7 * s;
+  constexpr auto maximum_time_step = 1.0e-6 * s;
+
+  constexpr double left_voltage = left_potential.numerical_value_in(V);
+  constexpr double right_voltage = right_potential.numerical_value_in(V);
+  constexpr double elementary_charge_coulomb =
+      elementary_charge.numerical_value_in(C);
+  constexpr double initial_density_cm3 =
+      initial_density.numerical_value_in(number_density_unit);
+  constexpr double end_time_s = end_time.numerical_value_in(s);
+  constexpr double max_time_step_s = maximum_time_step.numerical_value_in(s);
+
+  const auto field_metadata = field::centimetrePlasmaFieldMetadata();
+  ASSERT_EQ(mesh_.numCells(), 64u * 64u);
+
+  physics::SpeciesSet species;
+  const auto electron = species.add(
+      {.name = "e",
+       .charge = -elementary_charge_coulomb,
+       .mobility = electron_mobility.numerical_value_in(mobility_unit),
+       .diffusivity = electron_diffusivity.numerical_value_in(diffusivity_unit),
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  const auto ion = species.add(
+      {.name = "Ar+",
+       .charge = elementary_charge_coulomb,
+       .mobility = ion_mobility.numerical_value_in(mobility_unit),
+       .diffusivity = ion_diffusivity.numerical_value_in(diffusivity_unit),
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  physics::SpeciesCellFields density(mesh_, species.size(), initial_density_cm3,
+                                     field_metadata.number_density);
+
+  physics::ReactionNetwork reactions(species);
+  const auto ionization =
+      reactions.addReaction({.name = "electron-impact ionization",
+                             .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
+
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, vacuum_permittivity.numerical_value_in(F / cm),
+      makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
+      makeConstantSpeciesBoundaryConditions(species.size(), initial_density_cm3),
+      std::make_unique<FailAfterSuccessfulCholmodSolves>(1u),
+      {.safety = 0.8,
+       .min_dt = 1.0e-12,
+       .max_dt = max_time_step_s,
+       .max_growth = 1.5},
+      field_metadata);
+
+  ElectronImpactIonizationEvaluator evaluator{
+      .electron = electron,
+      .ionization = ionization,
+      .neutral_density = neutral_density.numerical_value_in(number_density_unit),
+      .rate_coefficient = ionization_rate_coefficient.numerical_value_in(
+          ionization_coefficient_unit)};
+  // Keep this failure-path trace separate from test.log, which belongs to the
+  // successful 400 V run above.
+  std::ofstream trace_output("test.diag.log");
+  ASSERT_TRUE(trace_output.is_open());
+  trace::OstreamTraceSink trace_sink(trace_output);
+  AdaptiveStepPlasmaSimulation simulation(density,
+                                          reactions,
+                                          transport,
+                                          evaluator,
+                                          AdaptiveTimeClock(end_time_s),
+                                          trace_sink);
+
+  EXPECT_THROW(simulation.run(), std::runtime_error);
+
+  EXPECT_EQ(simulation.step(), 1u);
+  EXPECT_GT(simulation.time(), 0.0);
+  EXPECT_FALSE(simulation.finished());
+  EXPECT_GT(simulation.reactionRates()[ionization][0], 0.0);
+
+  trace_output.close();
+  std::ifstream trace_input("test.diag.log");
+  ASSERT_TRUE(trace_input.is_open());
+  std::ostringstream trace_contents;
+  trace_contents << trace_input.rdbuf();
+  const std::string trace_text = trace_contents.str();
+  const auto diagnostic_position =
+      trace_text.find("Error    | linalg.test_backend.solve.failed");
+  EXPECT_NE(diagnostic_position, std::string::npos) << trace_text;
+  EXPECT_NE(trace_text.find("SolveFailed"), std::string::npos) << trace_text;
+  EXPECT_NE(trace_text.find("injected failure after successful CHOLMOD solve"),
+            std::string::npos)
+      << trace_text;
+
+  const auto failure_position =
+      trace_text.find("simulation.adaptive_step.step.failed");
+  EXPECT_NE(failure_position, std::string::npos) << trace_text;
+  EXPECT_LT(diagnostic_position, failure_position) << trace_text;
 }
 
 }  // namespace pemu::simulation::test

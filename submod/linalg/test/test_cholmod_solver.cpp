@@ -7,8 +7,10 @@
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 
+#include <array>
 #include <cmath>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace pemu::linalg::test {
@@ -123,6 +125,25 @@ Vector makeExactSolution() {
 }
 
 }  // namespace
+
+TEST(SolverStatusTest, NamesAreStableAndHumanReadable) {
+  constexpr std::array cases{
+      std::pair{SolverStatus::Success, "Success"},
+      std::pair{SolverStatus::InvalidInput, "InvalidInput"},
+      std::pair{SolverStatus::PatternAnalysisFailed, "PatternAnalysisFailed"},
+      std::pair{SolverStatus::FactorizationFailed, "FactorizationFailed"},
+      std::pair{SolverStatus::SolveFailed, "SolveFailed"},
+      std::pair{SolverStatus::Singular, "Singular"},
+      std::pair{SolverStatus::NotPositiveDefinite, "NotPositiveDefinite"},
+      std::pair{SolverStatus::IncompatibleRhs, "IncompatibleRhs"},
+      std::pair{SolverStatus::NotAnalyzed, "NotAnalyzed"},
+      std::pair{SolverStatus::NotFactorized, "NotFactorized"},
+  };
+
+  for (const auto& [status, expected_name] : cases) {
+    EXPECT_EQ(pemu::to_string(status), expected_name);
+  }
+}
 
 // ============================================================
 // CHOLMOD

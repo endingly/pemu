@@ -6,6 +6,7 @@
 #include "types.hpp"
 
 #include <optional>
+#include <string_view>
 
 namespace pemu::linalg {
 
@@ -60,3 +61,34 @@ class ISolver {
 };
 
 }  // namespace pemu::linalg
+
+namespace pemu {
+
+[[nodiscard]] constexpr std::string_view to_string(
+    linalg::SolverStatus status) noexcept {
+  switch (status) {
+    case linalg::SolverStatus::Success:
+      return "Success";
+    case linalg::SolverStatus::InvalidInput:
+      return "InvalidInput";
+    case linalg::SolverStatus::PatternAnalysisFailed:
+      return "PatternAnalysisFailed";
+    case linalg::SolverStatus::FactorizationFailed:
+      return "FactorizationFailed";
+    case linalg::SolverStatus::SolveFailed:
+      return "SolveFailed";
+    case linalg::SolverStatus::Singular:
+      return "Singular";
+    case linalg::SolverStatus::NotPositiveDefinite:
+      return "NotPositiveDefinite";
+    case linalg::SolverStatus::IncompatibleRhs:
+      return "IncompatibleRhs";
+    case linalg::SolverStatus::NotAnalyzed:
+      return "NotAnalyzed";
+    case linalg::SolverStatus::NotFactorized:
+      return "NotFactorized";
+  }
+  return "Unknown";
+}
+
+}  // namespace pemu

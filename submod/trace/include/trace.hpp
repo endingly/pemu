@@ -19,6 +19,33 @@ enum class Severity : std::uint8_t {
   Critical,
 };
 
+}  // namespace pemu::trace
+
+namespace pemu {
+
+[[nodiscard]] constexpr std::string_view to_string(
+    trace::Severity severity) noexcept {
+  switch (severity) {
+    case trace::Severity::Trace:
+      return "Trace";
+    case trace::Severity::Debug:
+      return "Debug";
+    case trace::Severity::Info:
+      return "Info";
+    case trace::Severity::Warning:
+      return "Warning";
+    case trace::Severity::Error:
+      return "Error";
+    case trace::Severity::Critical:
+      return "Critical";
+  }
+  return "Unknown";
+}
+
+}  // namespace pemu
+
+namespace pemu::trace {
+
 enum class EventKind : std::uint8_t {
   Trace,
   Diagnostic,

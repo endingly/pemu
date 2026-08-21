@@ -6,9 +6,8 @@ pemu_register_public_headers(
     trace
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
-find_package(magic_enum CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
-target_link_libraries(trace PRIVATE magic_enum::magic_enum fmt::fmt)
+target_link_libraries(trace PRIVATE fmt::fmt)
 
 if(BUILD_TESTING)
     file(GLOB_RECURSE test_trace_srcs test/*.cpp)
