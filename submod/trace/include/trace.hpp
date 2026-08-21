@@ -54,6 +54,41 @@ enum class EventKind : std::uint8_t {
   Diagnostic,
 };
 
+enum class OutputChannel : std::uint8_t {
+  Diagnostic,
+  Statistics,
+};
+
+}  // namespace pemu::trace
+
+namespace pemu {
+
+[[nodiscard]] constexpr std::string_view to_string(
+    trace::EventKind kind) noexcept {
+  switch (kind) {
+    case trace::EventKind::Trace:
+      return "Trace";
+    case trace::EventKind::Diagnostic:
+      return "Diagnostic";
+  }
+  return "Unknown";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    trace::OutputChannel channel) noexcept {
+  switch (channel) {
+    case trace::OutputChannel::Diagnostic:
+      return "Diagnostic";
+    case trace::OutputChannel::Statistics:
+      return "Statistics";
+  }
+  return "Unknown";
+}
+
+}  // namespace pemu
+
+namespace pemu::trace {
+
 using TraceValue =
     std::variant<bool, std::int64_t, std::uint64_t, double, std::string_view>;
 
@@ -67,6 +102,7 @@ struct TraceAttribute {
 // synchronously. A sink that retains events must copy names and string values.
 struct TraceEvent {
   EventKind kind{EventKind::Trace};
+  OutputChannel output_channel{OutputChannel::Diagnostic};
   DiagDomain domain{DiagDomain::trace};
   std::string_view category;
   std::string_view name;

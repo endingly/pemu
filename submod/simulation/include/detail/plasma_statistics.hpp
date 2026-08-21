@@ -137,6 +137,7 @@ void emitSpeciesStatistics(
                               std::string_view{physical_volume.name()}},
     };
     sink({.kind = statisticsKind(severity),
+          .output_channel = trace::OutputChannel::Statistics,
           .domain = trace::DiagDomain::physics,
           .category = "species",
           .name = "statistics",
@@ -174,12 +175,14 @@ void emitChargeStatistics(Sink& sink,
       trace::TraceAttribute{"net_charge", statistics.integral, integral_unit},
       trace::TraceAttribute{"absolute_charge", statistics.l1_integral,
                             integral_unit},
+      trace::TraceAttribute{"rms", statistics.weighted_rms, value_unit},
       trace::TraceAttribute{"relative_imbalance", relative_imbalance,
                             units::precise::one},
       trace::TraceAttribute{"volume_semantics",
                             std::string_view{physical_volume.name()}},
   };
   sink({.kind = statisticsKind(severity),
+        .output_channel = trace::OutputChannel::Statistics,
         .domain = trace::DiagDomain::physics,
         .category = "charge",
         .name = "statistics",
@@ -218,6 +221,7 @@ void emitPotentialStatistics(
                             std::string_view{physical_volume.name()}},
   };
   sink({.kind = statisticsKind(severity),
+        .output_channel = trace::OutputChannel::Statistics,
         .domain = trace::DiagDomain::field,
         .category = "potential",
         .name = "statistics",
@@ -256,6 +260,7 @@ void emitElectricFieldStatistics(
                             std::string_view{physical_volume.name()}},
   };
   sink({.kind = statisticsKind(severity),
+        .output_channel = trace::OutputChannel::Statistics,
         .domain = trace::DiagDomain::field,
         .category = "electric_field_normal",
         .name = "statistics",

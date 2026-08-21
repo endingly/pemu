@@ -2,6 +2,7 @@
 
 #include <pemu/trace/diag.hpp>
 #include <pemu/trace/ostream_trace_sink.hpp>
+#include <pemu/trace/split_trace_sink.hpp>
 #include <pemu/trace/statistics.hpp>
 #include <pemu/trace/trace.hpp>
 
@@ -26,6 +27,17 @@ class FlushCountingBuffer final : public std::stringbuf {
     return std::stringbuf::sync();
   }
 };
+
+[[nodiscard]] std::size_t countOccurrences(std::string_view text,
+                                           std::string_view needle) {
+  std::size_t count = 0;
+  std::size_t position = 0;
+  while ((position = text.find(needle, position)) != std::string_view::npos) {
+    ++count;
+    position += needle.size();
+  }
+  return count;
+}
 
 }  // namespace
 
@@ -173,27 +185,139 @@ TEST(TraceSinkTest, OstreamSinkFormatsTabularStructuredEvents) {
             std::string::npos);
   EXPECT_NE(output.str().find("|    PatternAnalysisFailed |"),
             std::string::npos);
+  EXPECT_NE(output.str().find("END TIME"), std::string::npos);
+  EXPECT_NE(output.str().find("REL RESIDUAL"), std::string::npos);
   EXPECT_FALSE(sink.failed());
 }
 
-TEST(TraceSinkTest, OstreamSinkFormatsAttributeUnits) {
+TEST(TraceSinkTest, StatisticsRendererGroupsRowsAndFormatsDedicatedColumns) {
+  const std::array species_attributes{
+      TraceAttribute{"step", std::uint64_t{3}},
+      TraceAttribute{"time", 0.25, units::precise::s},
+      TraceAttribute{"species", std::string_view{"e"}},
+      TraceAttribute{"samples", std::uint64_t{4096}},
+      TraceAttribute{"non_finite", std::uint64_t{0}},
+      TraceAttribute{"negative", std::uint64_t{0}},
+      TraceAttribute{"minimum", 1.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"maximum", 3.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"volume_mean", 2.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"rms", 2.5,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"total_number", 8.0, units::precise::one},
+      TraceAttribute{"physical_volume", 1.0, units::precise::cm.pow(3)},
+      TraceAttribute{"volume_semantics", std::string_view{"planar_extrusion"}},
+  };
+  const std::array field_attributes{
+      TraceAttribute{"step", std::uint64_t{3}},
+      TraceAttribute{"time", 0.25, units::precise::s},
+      TraceAttribute{"samples", std::uint64_t{4096}},
+      TraceAttribute{"non_finite", std::uint64_t{0}},
+      TraceAttribute{"minimum", 1.25, units::precise::V},
+      TraceAttribute{"maximum", 400.0, units::precise::V},
+      TraceAttribute{"volume_mean", 200.0, units::precise::V},
+      TraceAttribute{"rms", 230.0, units::precise::V},
+      TraceAttribute{"volume_integral", 5.0,
+                     units::precise::V * units::precise::cm.pow(3)},
+  };
+  const std::array next_step_attributes{
+      TraceAttribute{"step", std::uint64_t{4}},
+      TraceAttribute{"minimum", 2.0, units::precise::V},
+      TraceAttribute{"maximum", 401.0, units::precise::V},
+      TraceAttribute{"volume_mean", 201.0, units::precise::V},
+      TraceAttribute{"rms", 231.0, units::precise::V},
+      TraceAttribute{"volume_integral", 6.0,
+                     units::precise::V * units::precise::cm.pow(3)},
+  };
+  const TraceEvent species_event{
+      .output_channel = OutputChannel::Statistics,
+      .domain = DiagDomain::physics,
+      .category = "species",
+      .name = "statistics",
+      .attributes = species_attributes,
+  };
+  const TraceEvent field_event{
+      .output_channel = OutputChannel::Statistics,
+      .domain = DiagDomain::field,
+      .category = "potential",
+      .name = "statistics",
+      .attributes = field_attributes,
+  };
+  const TraceEvent next_step_event{
+      .output_channel = OutputChannel::Statistics,
+      .domain = DiagDomain::field,
+      .category = "potential",
+      .name = "statistics",
+      .attributes = next_step_attributes,
+  };
+  std::ostringstream output;
+  OstreamTraceSink sink(output);
+
+  sink(species_event);
+  sink(field_event);
+  sink(next_step_event);
+  sink.flush();
+
+  EXPECT_NE(output.str().find("STATISTICS | STEP=3 | TIME=0.25 [s]"),
+            std::string::npos);
+  EXPECT_NE(output.str().find("STATISTICS | STEP=4"), std::string::npos);
+  EXPECT_EQ(countOccurrences(output.str(), "STATISTICS | STEP="), 2u);
+  EXPECT_NE(output.str().find("FIELD"), std::string::npos);
+  EXPECT_NE(output.str().find("UNIT"), std::string::npos);
+  EXPECT_NE(output.str().find("MIN"), std::string::npos);
+  EXPECT_NE(output.str().find("MAX"), std::string::npos);
+  EXPECT_NE(output.str().find("MEAN"), std::string::npos);
+  EXPECT_NE(output.str().find("RMS"), std::string::npos);
+  EXPECT_NE(output.str().find("INTEGRAL"), std::string::npos);
+  EXPECT_NE(output.str().find("species[e]"), std::string::npos);
+  EXPECT_NE(output.str().find("potential"), std::string::npos);
+  EXPECT_NE(output.str().find("1/mL"), std::string::npos);
+  EXPECT_NE(output.str().find("8 [1]"), std::string::npos);
+  EXPECT_EQ(countOccurrences(output.str(), "CELL_SAMPLES=4096"), 1u);
+  EXPECT_EQ(countOccurrences(output.str(), "VOLUME_SEMANTICS="), 1u);
+  EXPECT_EQ(output.str().find("DETAILS"), std::string::npos);
+  EXPECT_EQ(output.str().find("non_finite=0"), std::string::npos);
+  EXPECT_EQ(output.str().find("negative=0"), std::string::npos);
+}
+
+TEST(TraceSinkTest, StatisticsRendererOnlyShowsNonZeroCountsAsDiagnostics) {
   const std::array attributes{
-      TraceAttribute{"minimum", 1.25, units::precise::V / units::precise::cm},
-      TraceAttribute{"integral", 5.0, units::precise::C},
+      TraceAttribute{"step", std::uint64_t{4}},
+      TraceAttribute{"species", std::string_view{"e"}},
+      TraceAttribute{"non_finite", std::uint64_t{0}},
+      TraceAttribute{"negative", std::uint64_t{2}},
+      TraceAttribute{"minimum", -1.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"maximum", 3.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"volume_mean", 1.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"rms", 2.0,
+                     units::precise::one / units::precise::cm.pow(3)},
+      TraceAttribute{"total_number", 4.0, units::precise::one},
   };
   const TraceEvent event{
-      .domain = DiagDomain::field,
-      .category = "electric_field_normal",
+      .kind = EventKind::Diagnostic,
+      .output_channel = OutputChannel::Statistics,
+      .domain = DiagDomain::physics,
+      .category = "species",
       .name = "statistics",
+      .severity = Severity::Warning,
       .attributes = attributes,
   };
   std::ostringstream output;
   OstreamTraceSink sink(output);
 
   sink(event);
+  sink.flush();
 
-  EXPECT_NE(output.str().find("minimum=1.25 [V/cm]"), std::string::npos);
-  EXPECT_NE(output.str().find("integral=5 [C]"), std::string::npos);
+  EXPECT_NE(output.str().find("STATISTICS DIAGNOSTICS"), std::string::npos);
+  EXPECT_NE(output.str().find("Warning"), std::string::npos);
+  EXPECT_NE(output.str().find("Diagnostic"), std::string::npos);
+  EXPECT_NE(output.str().find("negative=2"), std::string::npos);
+  EXPECT_EQ(output.str().find("non_finite=0"), std::string::npos);
 }
 
 TEST(TraceSinkTest, OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd) {
@@ -220,6 +344,44 @@ TEST(TraceSinkTest, OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd) {
   sink(run_completed);
   EXPECT_EQ(buffer.flush_count, 2);
   EXPECT_FALSE(sink.failed());
+}
+
+TEST(TraceSinkTest,
+     SplitSinkRoutesStatisticsSeparatelyAndFlushesThemEveryTwoSteps) {
+  std::ostringstream diagnostic_output;
+  FlushCountingBuffer statistics_buffer;
+  std::ostream statistics_output(&statistics_buffer);
+  SplitTraceSink sink{OstreamTraceSink{diagnostic_output},
+                      OstreamTraceSink{statistics_output}};
+
+  const TraceEvent abnormal_statistics{
+      .kind = EventKind::Diagnostic,
+      .output_channel = OutputChannel::Statistics,
+      .domain = DiagDomain::physics,
+      .category = "species",
+      .name = "statistics",
+      .severity = Severity::Warning,
+  };
+  const TraceEvent step_completed{
+      .domain = DiagDomain::simulation,
+      .category = "adaptive_step",
+      .name = "step.completed",
+  };
+
+  sink(abnormal_statistics);
+  sink(step_completed);
+  EXPECT_EQ(statistics_buffer.flush_count, 0);
+  sink(step_completed);
+
+  EXPECT_NE(statistics_buffer.str().find("STATISTICS"), std::string::npos);
+  EXPECT_NE(statistics_buffer.str().find("species"), std::string::npos);
+  EXPECT_EQ(statistics_buffer.str().find("simulation.adaptive_step"),
+            std::string::npos);
+  EXPECT_NE(diagnostic_output.str().find("simulation.adaptive_step"),
+            std::string::npos);
+  EXPECT_EQ(diagnostic_output.str().find("physics.species.statistics"),
+            std::string::npos);
+  EXPECT_EQ(statistics_buffer.flush_count, 1);
 }
 
 TEST(EnumStringTest, DomainsAndSeveritiesHaveStableNames) {
@@ -252,6 +414,11 @@ TEST(EnumStringTest, DomainsAndSeveritiesHaveStableNames) {
   for (const auto& [severity, expected_name] : severities) {
     EXPECT_EQ(pemu::to_string(severity), expected_name);
   }
+
+  EXPECT_EQ(pemu::to_string(EventKind::Trace), "Trace");
+  EXPECT_EQ(pemu::to_string(EventKind::Diagnostic), "Diagnostic");
+  EXPECT_EQ(pemu::to_string(OutputChannel::Diagnostic), "Diagnostic");
+  EXPECT_EQ(pemu::to_string(OutputChannel::Statistics), "Statistics");
 }
 
 TEST(TraceSinkTest, NullSinkAcceptsStructuredDiagnostics) {
@@ -284,15 +451,33 @@ TEST(TraceSinkTest, OstreamSinkFormatsDiagnosticEvent) {
   };
   std::ostringstream output;
   OstreamTraceSink sink(output);
+  const TraceEvent ordinary_before{
+      .domain = DiagDomain::simulation,
+      .category = "adaptive_step",
+      .name = "step.started",
+  };
+  const TraceEvent ordinary_after{
+      .domain = DiagDomain::simulation,
+      .category = "adaptive_step",
+      .name = "step.failed",
+      .severity = Severity::Error,
+  };
 
+  sink(ordinary_before);
   sink(diagnostic);
+  sink(ordinary_after);
 
+  EXPECT_EQ(countOccurrences(output.str(), "LEVEL    | EVENT"), 1u);
+  EXPECT_EQ(output.str().find("\nTRACE\n"), std::string::npos);
+  EXPECT_EQ(output.str().find("\nDIAGNOSTIC\n"), std::string::npos);
   EXPECT_NE(output.str().find("Warning  | equation.poisson.not_converged"),
             std::string::npos);
   EXPECT_NE(
       output.str().find("linear solve did not converge; residual=1.25e-06; "
                         "iterations=7"),
       std::string::npos);
+  EXPECT_NE(output.str().find("simulation.adaptive_step.step.failed"),
+            std::string::npos);
   EXPECT_FALSE(sink.failed());
 }
 

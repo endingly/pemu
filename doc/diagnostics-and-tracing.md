@@ -72,8 +72,23 @@ concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
 
 sink 必须是 `noexcept`，诊断失败不能改变数值推进的控制流。`OstreamTraceSink` 捕获流
 异常并记录自身的失败状态；其实现使用 fmt 在内部缓冲区中完成格式化，再写入目标流。
-它在首次事件前输出一次表头，将 `step`、`time`、`dt`、`end_time`、求解器状态及残差
-放入对齐列；一个事件缺少的属性对应空白单元格，其他属性和诊断消息进入 `DETAILS` 列。
+`TraceEvent` 始终是唯一的数据模型，ostream 展示层根据事件语义选择三个分别命名的
+renderer：`OrdinaryEventRenderer`、`DiagnosticEventRenderer` 和
+`StatisticsEventRenderer`。它们的公共声明统一位于 `pemu/trace/renderer/`，实现统一位于
+`submod/trace/src/renderer/`，`OstreamTraceSink` 只负责选择 renderer、刷新与记录流错误。
+
+普通事件与 diagnostic 虽由不同 renderer 处理，但共同输出到原有的单一事件表：
+`LEVEL/EVENT/STEP/TIME/DT/END TIME/SOLVER/RESIDUAL/REL RESIDUAL/DETAILS`。因此 failure
+路径从普通事件进入底层 diagnostic、再回到 `step.failed` 时不会重复插入不同表头或
+`TRACE/DIAGNOSTIC` 分段标题。只有 statistics 使用独立物理量表，不再复用普通日志的空列，
+也不把整组统计属性串接进 `DETAILS`。
+
+statistics 会缓冲当前 step 的少量汇总行，在下一个统计 step 到来或 sink 被 `flush()` 时
+一次性输出 `FIELD/UNIT/MIN/MAX/MEAN/RMS/INTEGRAL` 表。`samples`、
+`volume_semantics`、物理体积和物理面面积属于固定运行元数据，只在统计文件的首组输出
+一次。`non_finite`、`negative` 和非法权重计数为零时完全隐藏；非零时在对应 step 的
+`STATISTICS DIAGNOSTICS` 小节中按原有 Warning/Error 与 Diagnostic 语义显示。
+
 为支持长时间仿真的 `tail -f` 预览，文件流默认在每两个 simulation 时间步完成后刷新；
 `run.completed` 或 `run.failed` 会无条件刷新尚未刷新的尾部事件。此策略只刷新 C++ 流
 缓冲区以便观察，不提供断电耐久性的 `fsync` 保证。
@@ -109,10 +124,9 @@ pemu::trace::OstreamTraceSink sink(std::clog);
 sink(diagnostic);
 ```
 
-它仍通过 `TraceSink` 输出为
-`[Warning] equation.poisson.not_converged: linear solve did not converge`。应用可统一按照
-`kind`、`domain` 和 `severity` 过滤，不需要管理两套 sink，也不会产生不一致的级别、
-属性和输出策略。
+它仍通过同一个 `TraceSink` 传递，并由专门的 `DiagnosticEventRenderer` 格式化为统一事件
+表中的一行；应用可统一按照 `kind`、`domain` 和 `severity` 过滤，不需要维护第二种事件
+数据结构，也不会产生不一致的级别、属性和输出策略。
 
 ### 4.1 返回值携带诊断的边界
 
@@ -142,12 +156,18 @@ sink。根因诊断之后仍可发出 `step.failed`，前者说明“为什么�
 可以内部持有引用或指针。默认 sink 是空类型，通过 `[[no_unique_address]]` 保存，不引入
 虚调用，也不改变原有调用代码；`if constexpr` 同时跳过默认路径上的事件和属性构造。
 
-例如，将自适应仿真的事件直接写到标准日志流：
+例如，将自适应仿真的普通 trace/diagnostic 与物理统计分别写入两个文件：
 
 ```cpp
+#include <fstream>
 #include <pemu/trace/ostream_trace_sink.hpp>
+#include <pemu/trace/split_trace_sink.hpp>
 
-pemu::trace::OstreamTraceSink trace(std::clog);
+std::ofstream diagnostic_output("simulation.diag.log");
+std::ofstream statistics_output("simulation.statistics.log");
+pemu::trace::SplitTraceSink trace{
+    pemu::trace::OstreamTraceSink{diagnostic_output},
+    pemu::trace::OstreamTraceSink{statistics_output}};
 
 pemu::simulation::AdaptiveStepPlasmaSimulation simulation(
     density, reactions, transport, evaluator,
@@ -158,10 +178,28 @@ pemu::simulation::AdaptiveStepPlasmaSimulation simulation(
 simulation.run();
 ```
 
-输出为一行一个事件，例如：
+`TraceEvent::output_channel` 显式决定事件写入 `Diagnostic` 还是 `Statistics` 通道。
+路由不依赖事件名或严重级别，因此异常统计即使同时具有 `EventKind::Diagnostic` 和
+`Warning/Error` 严重级别，仍完整写入统计文件；普通推进 trace 与各模块 diagnostic
+则只写入诊断文件。`SplitTraceSink` 每两个已完成时间步刷新统计 sink，并在
+`run.completed` 或 `run.failed` 时刷新尾部记录，两个文件可在仿真运行期间独立预览。
+
+普通 trace 与 diagnostic 在诊断文件中连续使用同一张表，例如：
 
 ```text
-[Debug] simulation.adaptive_step.timestep.selected step=2 dt=0.02 transport_limit=inf positivity_limit=inf stability_limit=inf
+LEVEL    | EVENT                                                      | STEP | ... | SOLVER      | ... | DETAILS
+Trace    | simulation.adaptive_step.step.started                      |    1 | ... |             | ... |
+Error    | linalg.cholmod.solve.failed                                |    1 | ... | SolveFailed | ... | linear solve failed
+Error    | simulation.adaptive_step.step.failed                       |    1 | ... | SolveFailed | ... |
+```
+
+统计文件则按时间步形成独立表格：
+
+```text
+STATISTICS | STEP=2 | TIME=0.04 [s]
+FIELD                          | UNIT             | MIN | MAX | MEAN | RMS | INTEGRAL
+species[e]                     | 1/mL             | ... | ... |  ... | ... | ... [1]
+potential                      | V                | ... | ... |  ... | ... | ... [mV*L]
 ```
 
 当前事件顺序如下：
@@ -228,12 +266,14 @@ $[u][w]$。单位只在统计器收尾和 trace 事件组装阶段附加并相�
 仍只接收 `double value, double weight`。启用统计时，simulation 构造函数还会验证数密度、
 电荷密度、电势和法向电场都具有期望的 `QuantityKind`，缺失或错误 metadata 会立即拒绝。
 
-`TraceAttribute` 可附带 `precise_unit`，ostream 输出形如
-`minimum=3.125 [V]`、`net_charge=0 [C]`。LLNL Units 可以把等价单位规范化显示，例如
-`cm^3` 显示成 `mL`；无量纲量统一显示为 `[1]`。
+`TraceAttribute` 可附带 `precise_unit`。统计表的 `UNIT` 是 MIN/MAX/MEAN/RMS 的字段
+单位，`INTEGRAL` 单元格单独携带积分单位，例如 `potential | V | ... | 200 [mV*L]`。
+LLNL Units 可以把等价单位规范化显示，例如 `cm^3` 显示成 `mL`；无量纲量统一显示为
+`[1]`。
 
-正常统计作为 `Debug/Trace` 事件输出。物种密度出现负值时升级为 `Warning/Diagnostic`；
-任意场出现 NaN、无穷值、非法物理权重或无有效统计量时升级为 `Error/Diagnostic`。
+所有统计事件均标记为 `Statistics` 输出通道。正常统计作为 `Debug/Trace` 事件输出；物种
+密度出现负值时升级为 `Warning/Diagnostic`，任意场出现 NaN、无穷值、非法物理权重或
+无有效统计量时升级为 `Error/Diagnostic`。后两者的 diagnostic 语义不改变其统计文件归属。
 
 统计扫描的成本为每个采样步 $O(N_sN_c+N_f)$，因此默认关闭。启用后可用
 `sample_every_steps` 独立控制采样频率；`NullTraceSink` 路径通过 `if constexpr` 完全

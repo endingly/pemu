@@ -16,6 +16,7 @@
 #include <pemu/simulation/fixed_step_clock.hpp>
 #include <pemu/simulation/fixed_step_plasma_simulation.hpp>
 #include <pemu/trace/ostream_trace_sink.hpp>
+#include <pemu/trace/split_trace_sink.hpp>
 #include <pemu/trace/trace.hpp>
 
 #include <mp-units/systems/si.h>
@@ -512,7 +513,8 @@ class FailAfterSuccessfulCholmodSolves final : public linalg::ISolver {
       std::size_t successful_solves_before_failure)
       : successful_solves_before_failure_(successful_solves_before_failure) {}
 
-  linalg::SolverResult analyzePattern(const linalg::SparseMatrix& matrix) override {
+  linalg::SolverResult analyzePattern(
+      const linalg::SparseMatrix& matrix) override {
     return backend_.analyzePattern(matrix);
   }
 
@@ -1844,12 +1846,14 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
           neutral_density.numerical_value_in(number_density_unit),
       .rate_coefficient = ionization_rate_coefficient.numerical_value_in(
           ionization_coefficient_unit)};
-  // Keep the multi-step trace out of the test runner's terminal output.  The
-  // path is intentionally relative to the process working directory so a
-  // direct invocation writes ./test.log.
-  std::ofstream trace_output("test.log");
-  ASSERT_TRUE(trace_output.is_open());
-  trace::OstreamTraceSink trace_sink(trace_output);
+  // Keep the multi-step output out of the test runner's terminal output and
+  // separate ordinary diagnostics from field statistics.
+  std::ofstream diagnostic_output("test.diag.log");
+  std::ofstream statistics_output("test.statistics.log");
+  ASSERT_TRUE(diagnostic_output.is_open());
+  ASSERT_TRUE(statistics_output.is_open());
+  trace::SplitTraceSink trace_sink{trace::OstreamTraceSink{diagnostic_output},
+                                   trace::OstreamTraceSink{statistics_output}};
   AdaptiveStepPlasmaSimulation simulation(
       density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
       trace_sink,
@@ -1897,25 +1901,41 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
     EXPECT_GT(simulation.source()[ion][cell], 0.0);
   }
 
-  trace_output.close();
-  std::ifstream trace_input("test.log");
-  ASSERT_TRUE(trace_input.is_open());
-  std::ostringstream trace_contents;
-  trace_contents << trace_input.rdbuf();
-  const std::string trace_text = trace_contents.str();
-  EXPECT_NE(trace_text.find("physics.species.statistics"), std::string::npos);
-  EXPECT_NE(trace_text.find("physics.charge.statistics"), std::string::npos);
-  EXPECT_NE(trace_text.find("field.potential.statistics"), std::string::npos);
-  EXPECT_NE(trace_text.find("field.electric_field_normal.statistics"),
+  diagnostic_output.close();
+  statistics_output.close();
+  std::ifstream diagnostic_input("test.diag.log");
+  std::ifstream statistics_input("test.statistics.log");
+  ASSERT_TRUE(diagnostic_input.is_open());
+  ASSERT_TRUE(statistics_input.is_open());
+  std::ostringstream diagnostic_contents;
+  std::ostringstream statistics_contents;
+  diagnostic_contents << diagnostic_input.rdbuf();
+  statistics_contents << statistics_input.rdbuf();
+  const std::string diagnostic_text = diagnostic_contents.str();
+  const std::string statistics_text = statistics_contents.str();
+  EXPECT_NE(diagnostic_text.find("simulation.adaptive_step.run.started"),
             std::string::npos);
-  EXPECT_NE(trace_text.find("volume_semantics=planar_extrusion"),
+  EXPECT_EQ(diagnostic_text.find("STATISTICS"), std::string::npos);
+  EXPECT_EQ(statistics_text.find("simulation.adaptive_step"),
             std::string::npos);
-  EXPECT_NE(trace_text.find("physical_volume=1 [mL]"), std::string::npos);
-  EXPECT_NE(trace_text.find("total_number=1e+06 [1]"), std::string::npos);
-  EXPECT_NE(trace_text.find("net_charge=0 [C]"), std::string::npos);
-  EXPECT_NE(trace_text.find("minimum=3.125 [V]"), std::string::npos);
-  EXPECT_NE(trace_text.find("physical_face_area=130 [cm^2]"),
+  EXPECT_NE(statistics_text.find("STATISTICS | STEP=0"), std::string::npos);
+  EXPECT_NE(statistics_text.find("FIELD"), std::string::npos);
+  EXPECT_NE(statistics_text.find("UNIT"), std::string::npos);
+  EXPECT_NE(statistics_text.find("species[e]"), std::string::npos);
+  EXPECT_NE(statistics_text.find("species[Ar+]"), std::string::npos);
+  EXPECT_NE(statistics_text.find("charge_density"), std::string::npos);
+  EXPECT_NE(statistics_text.find("potential"), std::string::npos);
+  EXPECT_NE(statistics_text.find("electric_field_normal"), std::string::npos);
+  EXPECT_NE(statistics_text.find("VOLUME_SEMANTICS=planar_extrusion"),
             std::string::npos);
+  EXPECT_NE(statistics_text.find("PHYSICAL_VOLUME=1 [mL]"), std::string::npos);
+  EXPECT_NE(statistics_text.find("PHYSICAL_FACE_AREA=130 [cm^2]"),
+            std::string::npos);
+  EXPECT_NE(statistics_text.find("1e+06 [1]"), std::string::npos);
+  EXPECT_NE(statistics_text.find("0 [C]"), std::string::npos);
+  EXPECT_EQ(statistics_text.find("DETAILS"), std::string::npos);
+  EXPECT_EQ(statistics_text.find("non_finite=0"), std::string::npos);
+  EXPECT_EQ(statistics_text.find("negative=0"), std::string::npos);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
@@ -1982,7 +2002,8 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, vacuum_permittivity.numerical_value_in(F / cm),
       makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
-      makeConstantSpeciesBoundaryConditions(species.size(), initial_density_cm3),
+      makeConstantSpeciesBoundaryConditions(species.size(),
+                                            initial_density_cm3),
       std::make_unique<FailAfterSuccessfulCholmodSolves>(1u),
       {.safety = 0.8,
        .min_dt = 1.0e-12,
@@ -1993,20 +2014,17 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ElectronImpactIonizationEvaluator evaluator{
       .electron = electron,
       .ionization = ionization,
-      .neutral_density = neutral_density.numerical_value_in(number_density_unit),
+      .neutral_density =
+          neutral_density.numerical_value_in(number_density_unit),
       .rate_coefficient = ionization_rate_coefficient.numerical_value_in(
           ionization_coefficient_unit)};
-  // Keep this failure-path trace separate from test.log, which belongs to the
-  // successful 400 V run above.
-  std::ofstream trace_output("test.diag.log");
+  // Keep this injected failure separate from the successful 400 V run above.
+  std::ofstream trace_output("test.failure.diag.log");
   ASSERT_TRUE(trace_output.is_open());
   trace::OstreamTraceSink trace_sink(trace_output);
-  AdaptiveStepPlasmaSimulation simulation(density,
-                                          reactions,
-                                          transport,
-                                          evaluator,
-                                          AdaptiveTimeClock(end_time_s),
-                                          trace_sink);
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
+      trace_sink);
 
   EXPECT_THROW(simulation.run(), std::runtime_error);
 
@@ -2016,7 +2034,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   EXPECT_GT(simulation.reactionRates()[ionization][0], 0.0);
 
   trace_output.close();
-  std::ifstream trace_input("test.diag.log");
+  std::ifstream trace_input("test.failure.diag.log");
   ASSERT_TRUE(trace_input.is_open());
   std::ostringstream trace_contents;
   trace_contents << trace_input.rdbuf();
