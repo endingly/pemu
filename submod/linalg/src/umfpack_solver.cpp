@@ -1,29 +1,45 @@
 #include <pemu/linalg/umfpack_solver.hpp>
 
 namespace pemu::linalg {
+namespace {
 
-SolverStatus UmfpackSolver::analyzePattern(const SparseMatrix& A) {
+[[nodiscard]] SolverResult failure(SolverStatus status, std::string_view name,
+                                   std::string_view message) noexcept {
+  return {
+      .status = status,
+      .diagnostic = trace::makeDiagnosticEvent(trace::DiagDomain::linalg,
+                                               "umfpack", name, message),
+  };
+}
+
+}  // namespace
+
+SolverResult UmfpackSolver::analyzePattern(const SparseMatrix& A) {
   analyzed_ = false;
   factorized_ = false;
 
   if (A.rows() == 0 || A.rows() != A.cols()) {
-    return SolverStatus::InvalidInput;
+    return failure(SolverStatus::InvalidInput, "analyze.invalid_matrix",
+                   "matrix must be non-empty and square");
   }
 
   solver_.analyzePattern(A);
 
   if (solver_.info() != Eigen::Success) {
-    return SolverStatus::PatternAnalysisFailed;
+    return failure(SolverStatus::PatternAnalysisFailed,
+                   "analyze.backend_failed",
+                   "UMFPACK symbolic analysis failed");
   }
 
   analyzed_ = true;
 
-  return SolverStatus::Success;
+  return {.status = SolverStatus::Success};
 }
 
-SolverStatus UmfpackSolver::factorize(const SparseMatrix& A) {
+SolverResult UmfpackSolver::factorize(const SparseMatrix& A) {
   if (!analyzed_) {
-    return SolverStatus::NotAnalyzed;
+    return failure(SolverStatus::NotAnalyzed, "factorize.not_analyzed",
+                   "analyzePattern must succeed before factorize");
   }
 
   factorized_ = false;
@@ -31,27 +47,37 @@ SolverStatus UmfpackSolver::factorize(const SparseMatrix& A) {
   solver_.factorize(A);
 
   if (solver_.info() == Eigen::NumericalIssue) {
-    return SolverStatus::Singular;
+    return failure(SolverStatus::Singular, "factorize.singular",
+                   "matrix is singular");
   }
 
   if (solver_.info() != Eigen::Success) {
-    return SolverStatus::FactorizationFailed;
+    return failure(SolverStatus::FactorizationFailed,
+                   "factorize.backend_failed",
+                   "UMFPACK numerical factorization failed");
   }
 
   factorized_ = true;
 
-  return SolverStatus::Success;
+  return {.status = SolverStatus::Success};
 }
 
 SolverResult UmfpackSolver::solve(ConstVectorRef b, VectorRef x) {
   if (!factorized_) {
-    return {.status = SolverStatus::NotFactorized};
+    return failure(SolverStatus::NotFactorized, "solve.not_factorized",
+                   "factorize must succeed before solve");
+  }
+
+  if (b.size() != x.size()) {
+    return failure(SolverStatus::InvalidInput, "solve.size_mismatch",
+                   "right-hand side and solution sizes differ");
   }
 
   x = solver_.solve(b);
 
   if (solver_.info() != Eigen::Success) {
-    return {.status = SolverStatus::SolveFailed};
+    return failure(SolverStatus::SolveFailed, "solve.backend_failed",
+                   "UMFPACK solve failed");
   }
 
   return {.status = SolverStatus::Success};

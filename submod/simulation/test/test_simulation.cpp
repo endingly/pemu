@@ -15,6 +15,7 @@
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
 #include <pemu/simulation/fixed_step_plasma_simulation.hpp>
+#include <pemu/trace/ostream_trace_sink.hpp>
 #include <pemu/trace/trace.hpp>
 
 #include <mp-units/systems/si.h>
@@ -26,6 +27,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -413,20 +415,20 @@ class CountingSolver final : public linalg::ISolver {
   int solve_count{};
   int reset_count{};
 
-  linalg::SolverStatus analyzePattern(const linalg::SparseMatrix&) override {
+  linalg::SolverResult analyzePattern(const linalg::SparseMatrix&) override {
     ++analyze_count;
 
     analyzed_ = true;
 
-    return linalg::SolverStatus::Success;
+    return {.status = linalg::SolverStatus::Success};
   }
 
-  linalg::SolverStatus factorize(const linalg::SparseMatrix&) override {
+  linalg::SolverResult factorize(const linalg::SparseMatrix&) override {
     ++factorize_count;
 
     factorized_ = true;
 
-    return linalg::SolverStatus::Success;
+    return {.status = linalg::SolverStatus::Success};
   }
 
   linalg::SolverResult solve(linalg::ConstVectorRef b,
@@ -455,6 +457,44 @@ class CountingSolver final : public linalg::ISolver {
   bool isFactorized() const noexcept override {
     return factorized_;
   }
+
+ private:
+  bool analyzed_{false};
+  bool factorized_{false};
+};
+
+class DiagnosticFailingSolver final : public linalg::ISolver {
+ public:
+  linalg::SolverResult analyzePattern(const linalg::SparseMatrix&) override {
+    analyzed_ = true;
+    return {.status = linalg::SolverStatus::Success};
+  }
+
+  linalg::SolverResult factorize(const linalg::SparseMatrix&) override {
+    factorized_ = true;
+    return {.status = linalg::SolverStatus::Success};
+  }
+
+  linalg::SolverResult solve(linalg::ConstVectorRef,
+                             linalg::VectorRef) override {
+    return {
+        .status = linalg::SolverStatus::SolveFailed,
+        .residual_norm = 2.5,
+        .relative_residual = 0.25,
+        .diagnostic = trace::makeDiagnosticEvent(
+            trace::DiagDomain::linalg, "test_backend", "solve.failed",
+            "injected linear solve failure"),
+    };
+  }
+
+  void reset() override {
+    analyzed_ = false;
+    factorized_ = false;
+  }
+
+  bool isAnalyzed() const noexcept override { return analyzed_; }
+
+  bool isFactorized() const noexcept override { return factorized_; }
 
  private:
   bool analyzed_{false};
@@ -982,6 +1022,36 @@ TEST_F(FixedStepPlasmaSimulationTest,
   EXPECT_NEAR(completed_times[1], 0.02, 1e-14);
 }
 
+TEST_F(FixedStepPlasmaSimulationTest,
+       EmitsReturnedDiagnosticBeforeStepFailureTrace) {
+  constexpr double dt = 0.01;
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<DiagnosticFailingSolver>());
+  std::ostringstream output;
+  trace::OstreamTraceSink sink(output);
+  FixedStepPlasmaSimulation simulation(density, reactions, transport,
+                                       NoReactionEvaluator{},
+                                       FixedStepClock(dt, 1), sink);
+
+  const auto result = simulation.advanceOneStep();
+
+  EXPECT_EQ(result.status, linalg::SolverStatus::SolveFailed);
+  EXPECT_NE(output.str().find(
+                "[Error] linalg.test_backend.solve.failed: injected linear "
+                "solve failure step=0"),
+            std::string::npos)
+      << output.str();
+  EXPECT_LT(output.str().find("linalg.test_backend.solve.failed"),
+            output.str().find("simulation.fixed_step.step.failed"));
+  EXPECT_EQ(simulation.step(), 0u);
+}
+
 // ============================================================
 // 5. Exactly one Poisson solve per timestep.
 //
@@ -1273,6 +1343,36 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   EXPECT_NEAR(completed_times[0], 0.04, 1e-14);
   EXPECT_NEAR(completed_times[1], 0.08, 1e-14);
   EXPECT_NEAR(completed_times[2], 0.1, 1e-14);
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       EmitsReturnedDiagnosticBeforeStepFailureTrace) {
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<DiagnosticFailingSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+  std::ostringstream output;
+  trace::OstreamTraceSink sink(output);
+  AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
+                                          NoReactionEvaluator{},
+                                          AdaptiveTimeClock(0.1), sink);
+
+  const auto result = simulation.advanceOneStep();
+
+  EXPECT_EQ(result.status, linalg::SolverStatus::SolveFailed);
+  EXPECT_NE(output.str().find(
+                "[Error] linalg.test_backend.solve.failed: injected linear "
+                "solve failure step=0"),
+            std::string::npos)
+      << output.str();
+  EXPECT_LT(output.str().find("linalg.test_backend.solve.failed"),
+            output.str().find("simulation.adaptive_step.step.failed"));
+  EXPECT_EQ(simulation.step(), 0u);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulationTest,

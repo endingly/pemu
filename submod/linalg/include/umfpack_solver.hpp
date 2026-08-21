@@ -10,9 +10,9 @@ class UmfpackSolver final : public ISolver {
  public:
   using Backend = Eigen::UmfPackLU<SparseMatrix>;
 
-  SolverStatus analyzePattern(const SparseMatrix& A) override;
+  SolverResult analyzePattern(const SparseMatrix& A) override;
 
-  SolverStatus factorize(const SparseMatrix& A) override;
+  SolverResult factorize(const SparseMatrix& A) override;
 
   SolverResult solve(ConstVectorRef b, VectorRef x) override;
 

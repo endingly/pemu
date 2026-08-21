@@ -213,9 +213,9 @@ double solvePoissonAndGetError(Index n) {
 
   CholmodSolver solver;
 
-  EXPECT_EQ(solver.analyzePattern(system.A), SolverStatus::Success);
+  EXPECT_EQ(solver.analyzePattern(system.A).status, SolverStatus::Success);
 
-  EXPECT_EQ(solver.factorize(system.A), SolverStatus::Success);
+  EXPECT_EQ(solver.factorize(system.A).status, SolverStatus::Success);
 
   const auto result = solver.solve(system.b, x);
 
@@ -239,9 +239,9 @@ TEST(PoissonTest, SolvesManufacturedSolution) {
 
   CholmodSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(system.A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(system.A).status, SolverStatus::Success);
 
-  ASSERT_EQ(solver.factorize(system.A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(system.A).status, SolverStatus::Success);
 
   const auto result = solver.solve(system.b, numerical);
 
@@ -302,9 +302,9 @@ TEST(PoissonTest, MatrixCanBeCholeskyFactorized) {
 
   CholmodSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(system.A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(system.A).status, SolverStatus::Success);
 
-  EXPECT_EQ(solver.factorize(system.A), SolverStatus::Success);
+  EXPECT_EQ(solver.factorize(system.A).status, SolverStatus::Success);
 }
 
 TEST(PoissonTest, HasExpectedSparsityPattern) {

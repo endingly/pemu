@@ -20,25 +20,26 @@
 ## 2. 依赖方向
 
 ```text
-                     ┌───────────────┐
-                     │  pemu::trace  │
-                     │ 标准库类型与  │
-                     │ sink concept  │
-                     └───────┬───────┘
-                             │
-                             ▼
-equation ─────────────► simulation ─────────────► application
-返回 SolverResult、       组装结构化事件             选择 sink、
-TimeStepProposal                                   过滤与落盘
+┌───────────────┐
+│  pemu::trace  │  定义事件、诊断域与 sink concept
+└───────▲───────┘
+        │ 公共事件类型
+      linalg ─────► discretization ─────► equation ─────► simulation
+ API 失败处形成诊断                              传播结果       消费并交给 sink
+                                                               │
+                                                               ▼
+                                                          application
+                                                        选择过滤与落盘策略
 ```
 
 依赖规则如下：
 
 1. `trace` 不依赖其他 pemu 模块；
-2. `simulation` 公有依赖 `pemu::trace`，因为其模板化公共接口接受 trace sink；
-3. `equation`、`discretization` 和 `linalg` 返回诊断数据，但不主动写日志；
-4. `field`、`physics`、`mesh` 和 `unit` 不依赖 trace 模块；
-5. 最终应用决定输出到 `std::clog`、内存、测试收集器或未来的异步后端。
+2. `linalg` 公有依赖 `pemu::trace`，因为 `SolverResult` 可以携带统一的诊断事件；
+3. `equation` 原样传播底层诊断，也可以为自己检测到的可恢复失败形成诊断；
+4. `simulation` 公有依赖 `pemu::trace`，消费返回诊断并交给注入的 sink；
+5. `field`、`physics`、`mesh` 和 `unit` 不因普通参数校验而依赖 trace；
+6. 最终应用决定输出到 `std::clog`、内存、测试收集器或未来的异步后端。
 
 这样不会出现底层数值算子偷偷访问全局 logger 的情况，也不会令一个线性求解器同时
 承担数值计算和 I/O 策略。
@@ -100,9 +101,30 @@ sink(diagnostic);
 ```
 
 它仍通过 `TraceSink` 输出为
-`[warning] equation.poisson.not_converged: linear solve did not converge`。应用可统一按照
+`[Warning] equation.poisson.not_converged: linear solve did not converge`。应用可统一按照
 `kind`、`domain` 和 `severity` 过滤，不需要管理两套 sink，也不会产生不一致的级别、
 属性和输出策略。
+
+### 4.1 返回值携带诊断的边界
+
+`SolverResult` 可以携带一个可选的 `TraceEvent`。成功结果不携带诊断；失败结果由最先
+明确知道根因的模块创建 `EventKind::Diagnostic`，上层必须原样传播，不能把
+`linalg.cholmod.factorize.not_positive_definite` 抹平成含义更弱的
+`simulation.step.failed`。
+
+返回诊断使用 `makeDiagnosticEvent()` 构造。其域、类别、名称和消息必须引用静态存储，
+返回时不附带属性 span；这样复制 `SolverResult` 不会产生悬空视图。simulation 消费时
+再在栈上附加 `step`、`solver_status`、`residual_norm` 和 `relative_residual`，同步调用
+sink。根因诊断之后仍可发出 `step.failed`，前者说明“为什么失败”，后者说明“哪个上层
+阶段因此终止”。
+
+### 4.2 什么情况下不应返回诊断
+
+返回值附带诊断只用于调用者可能恢复、改用其他策略或正常终止的失败。构造参数非法、
+越界访问、跨网格误用等编程契约错误仍抛出异常；它们不应为了统一形式而改成容易被忽略
+的返回码。`linalg` 坚持 API-boundary / failure-path instrumentation：只在
+`analyzePattern()`、`factorize()`、`solve()` 的入口检查和后端失败出口形成诊断，不在
+矩阵遍历、分解或回代核心路径中发事件，也不持有 sink。
 
 ## 5. 与仿真的耦合
 
@@ -128,7 +150,7 @@ simulation.run();
 输出为一行一个事件，例如：
 
 ```text
-[debug] simulation.adaptive_step.timestep.selected step=2 dt=0.02 transport_limit=inf positivity_limit=inf stability_limit=inf
+[Debug] simulation.adaptive_step.timestep.selected step=2 dt=0.02 transport_limit=inf positivity_limit=inf stability_limit=inf
 ```
 
 当前事件顺序如下：
@@ -150,6 +172,9 @@ simulation.run();
 反应率和源项仍是用于本次推进的 $k$ 层工作量。trace 目前只输出标量状态，因此没有把
 二者误包装成同一时刻的场快照。
 
+若电静力返回诊断，事件顺序为“底层根因 diagnostic → `step.failed`”。固定步长和自适应
+仿真都遵循这一顺序，并且失败步不会提交时钟。
+
 ## 6. 中间场诊断的扩展方式
 
 若以后需要追踪每步的粒子总数、最小密度、最大电场或电荷守恒误差，应增加显式的
@@ -166,9 +191,7 @@ diagnostic probe：probe 在 simulation 的阶段边界读取只读场，计算�
 
 - `OstreamTraceSink` 是同步输出，逐步打印大量事件会影响长时间仿真的吞吐；生产环境
   应使用带级别过滤、步数抽样或后台队列的自定义 sink；
-- 当前已经提供统一的诊断事件模型，但数值模块尚未主动生成 `EventKind::Diagnostic`
-  事件；
-- 当前显式记录 `SolverResult` 失败；反应 evaluator 或输运更新直接抛出的异常仍原样
-  向上传播，尚未额外生成异常事件；
+- 当前 linalg 和泊松相容性检查会形成返回诊断；反应 evaluator 或输运更新直接抛出的
+  异常仍原样向上传播，尚未定义可恢复的通用推进结果；
 - 当前没有全局 logger、运行时 sink 注册表或跨线程排序，避免在单线程数值原型阶段
   提前固定并发模型。

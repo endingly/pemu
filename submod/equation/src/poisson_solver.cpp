@@ -57,9 +57,9 @@ linalg::SolverResult PoissonSolver::solve(field::CellField<double>& solution) {
         "belongs to another mesh");
   }
   if (!initialized_) {
-    const auto status = initialize();
-    if (status != linalg::SolverStatus::Success) {
-      return {.status = status};
+    const auto result = initialize();
+    if (!result.success()) {
+      return result;
     }
   }
   // --------------------------------------------------------
@@ -69,7 +69,12 @@ linalg::SolverResult PoissonSolver::solve(field::CellField<double>& solution) {
 
   if (pure_neumann_) {
     if (!hasCompatibleRhs()) {
-      return {.status = linalg::SolverStatus::IncompatibleRhs};
+      return {
+          .status = linalg::SolverStatus::IncompatibleRhs,
+          .diagnostic = trace::makeDiagnosticEvent(
+              trace::DiagDomain::equation, "poisson", "incompatible_rhs",
+              "pure-Neumann right-hand side violates compatibility"),
+      };
     }
     applyGaugeToRhs();
   }
@@ -102,34 +107,34 @@ void PoissonSolver::reset() {
   initialized_ = false;
 }
 
-linalg::SolverStatus PoissonSolver::initialize() {
+linalg::SolverResult PoissonSolver::initialize() {
   discretization_.assembleMatrix(A_);
 
   if (pure_neumann_) {
     applyGaugeToMatrix();
   }
 
-  const auto analyze_status = linear_solver_->analyzePattern(A_);
+  const auto analyze_result = linear_solver_->analyzePattern(A_);
 
-  if (analyze_status != linalg::SolverStatus::Success) {
+  if (!analyze_result.success()) {
 
     initialized_ = false;
 
-    return analyze_status;
+    return analyze_result;
   }
 
-  const auto factor_status = linear_solver_->factorize(A_);
+  const auto factor_result = linear_solver_->factorize(A_);
 
-  if (factor_status != linalg::SolverStatus::Success) {
+  if (!factor_result.success()) {
 
     initialized_ = false;
 
-    return factor_status;
+    return factor_result;
   }
 
   initialized_ = true;
 
-  return linalg::SolverStatus::Success;
+  return {.status = linalg::SolverStatus::Success};
 }
 
 void PoissonSolver::applyGaugeToMatrix() {

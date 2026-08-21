@@ -28,13 +28,12 @@ unit ─────────► field ◄──────── mesh
                  │               └────► boundary
 physics ─────────┘
 
-field + boundary + mesh + physics + linalg
-                    │
-                    ▼
-              discretization ─► equation ─► simulation
-                                              ▲
-                                              │
-                                            trace
+trace ─────► linalg ────────────────┐
+                                    │
+field + boundary + mesh + physics ──┴─► discretization ─► equation ─► simulation
+                                                                        ▲
+                                                                        │
+                                                                      trace
 ```
 
 - `mesh`：几何、拓扑与边界物理组；
@@ -43,7 +42,8 @@ field + boundary + mesh + physics + linalg
 - `trace`：结构化执行事件、sink concept 与通用同步 sink；
 - `boundary`：Dirichlet、Neumann 及其集合；
 - `discretization`：扩散、散度、迎风通量、泊松装配和后向欧拉装配；
-- `linalg`：Eigen 稀疏矩阵类型与求解器统一接口；
+- `linalg`：Eigen 稀疏矩阵类型与求解器统一接口；公共阶段统一返回可附带根因 diagnostic
+  的 `SolverResult`，但不直接输出；
 - `equation`：将装配与求解流程封装成稳态 `PoissonSolver`、瞬态
   `TransientDiffusionSolver`。
 - `simulation`：组织电静力、反应、输运和时钟，并向注入的 trace sink 报告阶段状态。
@@ -51,7 +51,9 @@ field + boundary + mesh + physics + linalg
 线性后端分两阶段工作：`analyzePattern(A)` 分析稀疏结构，`factorize(A)` 进行数值
 分解，最后 `solve(b,x)`。CHOLMOD 面向对称正定矩阵；UMFPACK 可处理一般非对称
 稀疏矩阵。方程求解器首次调用时装配矩阵并完成前两阶段，后续仅重组右端项并复用
-分解；这适合网格、系数、边界和时间步不变的多次求解。
+分解；这适合网格、系数、边界和时间步不变的多次求解。三个阶段均返回
+`SolverResult`：成功时无 diagnostic，API 边界或后端失败时由 linalg 形成结构化根因，
+equation 原样传播，simulation 再交给其 sink。
 
 ## 实现边界
 

@@ -44,6 +44,23 @@ struct TraceEvent {
   std::span<const TraceAttribute> attributes{};
 };
 
+// Creates a diagnostic event without attributes. This form is suitable for
+// attaching to a returned result when its string views refer to static storage.
+// Runtime numeric context remains in the result and can be added by the
+// consuming layer when the event is emitted.
+[[nodiscard]] constexpr TraceEvent makeDiagnosticEvent(
+    DiagDomain domain, std::string_view category, std::string_view name,
+    std::string_view message, Severity severity = Severity::Error) noexcept {
+  return {
+      .kind = EventKind::Diagnostic,
+      .domain = domain,
+      .category = category,
+      .name = name,
+      .message = message,
+      .severity = severity,
+  };
+}
+
 template <typename Sink>
 concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
   { sink(event) } noexcept -> std::same_as<void>;

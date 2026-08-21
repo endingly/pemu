@@ -67,7 +67,7 @@ class PoissonSolver {
 
   void reset();
 
-  linalg::SolverStatus initialize();
+  linalg::SolverResult initialize();
 
   bool is_initialized() const noexcept { return initialized_; }
 

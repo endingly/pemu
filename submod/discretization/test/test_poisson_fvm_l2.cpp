@@ -120,16 +120,16 @@ PoissonSolveResult solveManufacturedPoisson(const std::size_t n) {
 
   linalg::CholmodSolver solver;
 
-  const auto analyze_status = solver.analyzePattern(system.A);
+  const auto analyze_result = solver.analyzePattern(system.A);
 
-  if (analyze_status != linalg::SolverStatus::Success) {
+  if (!analyze_result.success()) {
 
     throw std::runtime_error("CHOLMOD pattern analysis failed");
   }
 
-  const auto factorize_status = solver.factorize(system.A);
+  const auto factorize_result = solver.factorize(system.A);
 
-  if (factorize_status != linalg::SolverStatus::Success) {
+  if (!factorize_result.success()) {
 
     throw std::runtime_error("CHOLMOD factorization failed");
   }

@@ -8,6 +8,7 @@
 #include <Eigen/SparseCore>
 
 #include <cmath>
+#include <string_view>
 #include <vector>
 
 namespace pemu::linalg::test {
@@ -33,6 +34,16 @@ double relativeResidual(const SparseMatrix& A, const Vector& x,
   }
 
   return r.norm() / b_norm;
+}
+
+void expectDiagnostic(const SolverResult& result, std::string_view category,
+                      std::string_view name) {
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_EQ(result.diagnostic->kind, trace::EventKind::Diagnostic);
+  EXPECT_EQ(result.diagnostic->domain, trace::DiagDomain::linalg);
+  EXPECT_EQ(result.diagnostic->category, category);
+  EXPECT_EQ(result.diagnostic->name, name);
+  EXPECT_FALSE(result.diagnostic->message.empty());
 }
 
 // ------------------------------------------------------------
@@ -131,12 +142,12 @@ TEST(CholmodSolverTest, SolvesSpdSystem) {
   EXPECT_FALSE(solver.isAnalyzed());
   EXPECT_FALSE(solver.isFactorized());
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
   EXPECT_TRUE(solver.isAnalyzed());
   EXPECT_FALSE(solver.isFactorized());
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   EXPECT_TRUE(solver.isAnalyzed());
   EXPECT_TRUE(solver.isFactorized());
@@ -144,6 +155,7 @@ TEST(CholmodSolverTest, SolvesSpdSystem) {
   const SolverResult result = solver.solve(b, x);
 
   ASSERT_TRUE(result.success());
+  EXPECT_FALSE(result.diagnostic.has_value());
 
   EXPECT_TRUE(x.isApprox(x_expected, kTolerance));
 
@@ -159,7 +171,10 @@ TEST(CholmodSolverTest, FactorizeWithoutAnalyzeFails) {
 
   CholmodSolver solver;
 
-  EXPECT_EQ(solver.factorize(A), SolverStatus::NotAnalyzed);
+  const auto result = solver.factorize(A);
+
+  EXPECT_EQ(result.status, SolverStatus::NotAnalyzed);
+  expectDiagnostic(result, "cholmod", "factorize.not_analyzed");
 }
 
 // ------------------------------------------------------------
@@ -177,11 +192,26 @@ TEST(CholmodSolverTest, SolveWithoutFactorizationFails) {
 
   CholmodSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
   const auto result = solver.solve(b, x);
 
   EXPECT_EQ(result.status, SolverStatus::NotFactorized);
+  expectDiagnostic(result, "cholmod", "solve.not_factorized");
+}
+
+TEST(CholmodSolverTest, RejectsMismatchedSolveDimensionsWithDiagnostic) {
+  const SparseMatrix A = makeSpdMatrix();
+  const Vector b = A * makeExactSolution();
+  Vector x = Vector::Zero(A.rows() - 1);
+  CholmodSolver solver;
+  ASSERT_TRUE(solver.analyzePattern(A).success());
+  ASSERT_TRUE(solver.factorize(A).success());
+
+  const auto result = solver.solve(b, x);
+
+  EXPECT_EQ(result.status, SolverStatus::InvalidInput);
+  expectDiagnostic(result, "cholmod", "solve.size_mismatch");
 }
 
 // ------------------------------------------------------------
@@ -198,7 +228,7 @@ TEST(CholmodSolverTest, ReusesPatternForNewMatrixValues) {
 
   CholmodSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
   // ---------------- first system ----------------
 
@@ -209,7 +239,7 @@ TEST(CholmodSolverTest, ReusesPatternForNewMatrixValues) {
 
     Vector x = Vector::Zero(A.rows());
 
-    ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+    ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
     ASSERT_TRUE(solver.solve(b, x).success());
 
@@ -231,7 +261,7 @@ TEST(CholmodSolverTest, ReusesPatternForNewMatrixValues) {
 
   // No analyzePattern() here.
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   const Vector x_expected = makeExactSolution();
 
@@ -255,9 +285,9 @@ TEST(CholmodSolverTest, ResetClearsSolverState) {
 
   CholmodSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   ASSERT_TRUE(solver.isAnalyzed());
   ASSERT_TRUE(solver.isFactorized());
@@ -283,13 +313,14 @@ TEST(UmfpackSolverTest, SolvesGeneralSparseSystem) {
 
   UmfpackSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   const SolverResult result = solver.solve(b, x);
 
   ASSERT_TRUE(result.success());
+  EXPECT_FALSE(result.diagnostic.has_value());
 
   EXPECT_TRUE(x.isApprox(x_expected, kTolerance));
 
@@ -301,7 +332,10 @@ TEST(UmfpackSolverTest, FactorizeWithoutAnalyzeFails) {
 
   UmfpackSolver solver;
 
-  EXPECT_EQ(solver.factorize(A), SolverStatus::NotAnalyzed);
+  const auto result = solver.factorize(A);
+
+  EXPECT_EQ(result.status, SolverStatus::NotAnalyzed);
+  expectDiagnostic(result, "umfpack", "factorize.not_analyzed");
 }
 
 TEST(UmfpackSolverTest, SolveWithoutFactorizationFails) {
@@ -315,11 +349,26 @@ TEST(UmfpackSolverTest, SolveWithoutFactorizationFails) {
 
   UmfpackSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
   const SolverResult result = solver.solve(b, x);
 
   EXPECT_EQ(result.status, SolverStatus::NotFactorized);
+  expectDiagnostic(result, "umfpack", "solve.not_factorized");
+}
+
+TEST(UmfpackSolverTest, RejectsMismatchedSolveDimensionsWithDiagnostic) {
+  const SparseMatrix A = makeGeneralMatrix();
+  const Vector b = A * makeExactSolution();
+  Vector x = Vector::Zero(A.rows() - 1);
+  UmfpackSolver solver;
+  ASSERT_TRUE(solver.analyzePattern(A).success());
+  ASSERT_TRUE(solver.factorize(A).success());
+
+  const auto result = solver.solve(b, x);
+
+  EXPECT_EQ(result.status, SolverStatus::InvalidInput);
+  expectDiagnostic(result, "umfpack", "solve.size_mismatch");
 }
 
 // ------------------------------------------------------------
@@ -331,11 +380,11 @@ TEST(UmfpackSolverTest, ReusesPatternForNewMatrixValues) {
 
   UmfpackSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
   // First numerical factorization.
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   {
     const Vector expected = makeExactSolution();
@@ -360,7 +409,7 @@ TEST(UmfpackSolverTest, ReusesPatternForNewMatrixValues) {
   A.coeffRef(2, 0) = 3.0;
   A.coeffRef(2, 2) = 7.0;
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   const Vector expected = makeExactSolution();
 
@@ -380,9 +429,9 @@ TEST(UmfpackSolverTest, ResetClearsSolverState) {
 
   UmfpackSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(A), SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(A).status, SolverStatus::Success);
 
-  ASSERT_EQ(solver.factorize(A), SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(A).status, SolverStatus::Success);
 
   solver.reset();
 

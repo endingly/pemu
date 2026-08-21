@@ -202,9 +202,10 @@ TEST_F(PoissonFvmTest, IntergrationTest) {
 
   linalg::CholmodSolver solver;
 
-  ASSERT_EQ(solver.analyzePattern(system.A), linalg::SolverStatus::Success);
+  ASSERT_EQ(solver.analyzePattern(system.A).status,
+            linalg::SolverStatus::Success);
 
-  ASSERT_EQ(solver.factorize(system.A), linalg::SolverStatus::Success);
+  ASSERT_EQ(solver.factorize(system.A).status, linalg::SolverStatus::Success);
 
   linalg::Vector x(system.b.size());
 

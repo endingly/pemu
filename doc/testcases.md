@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 181 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 185 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -134,7 +134,7 @@
 | `PureNeumannRequiresExplicitGauge` | 纯 Neumann 问题未指定规范条件时拒绝构造。 |
 | `SolvesPureNeumannWithPinnedCell` | 固定参考单元后恢复线性解析解。 |
 | `SolvesPureNeumannWithZeroMean` | 拉格朗日乘子约束得到体积加权零均值线性解。 |
-| `RejectsIncompatiblePureNeumannRhs` | 总源项与边界通量不平衡时返回 `IncompatibleRhs`。 |
+| `RejectsIncompatiblePureNeumannRhs` | 总源项与边界通量不平衡时返回 `IncompatibleRhs`，附带 equation/poisson 根因 diagnostic，且不覆盖原解场。 |
 
 ## 瞬态扩散（`submod/equation/test/test_transient_diffusion_solver.cpp`）
 
@@ -151,13 +151,15 @@
 | 用例 | 保证 |
 | --- | --- |
 | `CholmodSolverTest.SolvesSpdSystem` | CHOLMOD 能解已知对称正定稀疏系统，解和相对残差均正确。 |
-| `CholmodSolverTest.FactorizeWithoutAnalyzeFails` | 未分析结构时禁止数值分解。 |
-| `CholmodSolverTest.SolveWithoutFactorizationFails` | 未分解时禁止求解。 |
+| `CholmodSolverTest.FactorizeWithoutAnalyzeFails` | 未分析结构时禁止数值分解，并返回带 linalg 域、CHOLMOD 类别和稳定失败名的 diagnostic。 |
+| `CholmodSolverTest.SolveWithoutFactorizationFails` | 未分解时禁止求解，并在 API 失败出口附带 diagnostic。 |
+| `CholmodSolverTest.RejectsMismatchedSolveDimensionsWithDiagnostic` | RHS 与解向量尺寸不一致时不进入后端求解，并返回 `InvalidInput` 及结构化 diagnostic。 |
 | `CholmodSolverTest.ReusesPatternForNewMatrixValues` | 结构不变、数值改变时可复用符号分析并得到正确解。 |
 | `CholmodSolverTest.ResetClearsSolverState` | `reset` 清空已分析和已分解状态。 |
 | `UmfpackSolverTest.SolvesGeneralSparseSystem` | UMFPACK 能解已知一般非对称稀疏系统。 |
-| `UmfpackSolverTest.FactorizeWithoutAnalyzeFails` | UMFPACK 同样强制分析先于分解。 |
-| `UmfpackSolverTest.SolveWithoutFactorizationFails` | UMFPACK 同样强制分解先于求解。 |
+| `UmfpackSolverTest.FactorizeWithoutAnalyzeFails` | UMFPACK 同样强制分析先于分解，并附带自身类别的 diagnostic。 |
+| `UmfpackSolverTest.SolveWithoutFactorizationFails` | UMFPACK 同样强制分解先于求解，并附带根因 diagnostic。 |
+| `UmfpackSolverTest.RejectsMismatchedSolveDimensionsWithDiagnostic` | UMFPACK 在 API 边界拒绝不一致的 RHS/解尺寸并返回 diagnostic，不进入核心求解。 |
 | `UmfpackSolverTest.ReusesPatternForNewMatrixValues` | UMFPACK 在固定非对称模式下可复用符号分析。 |
 | `UmfpackSolverTest.ResetClearsSolverState` | UMFPACK `reset` 清空生命周期状态。 |
 
@@ -243,12 +245,14 @@
 | `FixedStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 反应模型读取的是本步泊松求解得到的电场。 |
 | `FixedStepPlasmaSimulationTest.RunAdvancesUntilClockIsFinished` | `run()` 严格运行到固定时钟指定的总步数。 |
 | `FixedStepPlasmaSimulationTest.EmitsOrderedTraceEventsAtEachPipelineStage` | 固定步长仿真按 run、步开始、电静力、反应率、源项和步提交的顺序发出结构化事件，并报告提交后的时间。 |
+| `FixedStepPlasmaSimulationTest.EmitsReturnedDiagnosticBeforeStepFailureTrace` | 固定步长仿真消费求解结果中的底层 diagnostic，附加步数和残差上下文，在 `step.failed` 前输出且不提交失败步。 |
 | `FixedStepPlasmaSimulationTest.SolvesPoissonExactlyOncePerTimeStepAndReusesFactorization` | 每步只解一次泊松方程，且固定矩阵复用分析和分解。 |
 | `FixedStepPlasmaSimulationTest.RejectsClockTimeStepDifferentFromTransportTimeStep` | 仿真时钟与输运推进器的 $\Delta t$ 必须一致。 |
 | `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
 | `AdaptiveStepPlasmaSimulationTest.EmitsOrderedTraceEventsWithTimeStepDiagnostics` | 自适应仿真逐阶段发出 trace，且 `timestep.selected` 和 `step.completed` 分别准确报告实际步长与提交后的时间。 |
+| `AdaptiveStepPlasmaSimulationTest.EmitsReturnedDiagnosticBeforeStepFailureTrace` | 自适应仿真同样先输出返回的根因 diagnostic，再输出阶段失败 trace，并保持时钟未推进。 |
 | `AdaptiveStepPlasmaSimulationTest.AdvanceOneStepEvaluatesReactionAndUpdatesSpecies` | 单个自适应步完成电静力、反应率、化学源项和物种更新，且记录实际步长。 |
 | `AdaptiveStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一个自适应步都从最新粒子密度重新计算反应率。 |
 | `AdaptiveStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 自适应反应模型读取的电场来自同一时间层的泊松求解。 |

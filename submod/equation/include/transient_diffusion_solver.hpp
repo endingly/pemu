@@ -15,24 +15,24 @@ class TransientDiffusionSolver {
     }
   }
 
-  linalg::SolverStatus initialize() {
+  linalg::SolverResult initialize() {
     discretization_.assembleMatrix(A_);
 
-    auto status = solver_->analyzePattern(A_);
+    auto result = solver_->analyzePattern(A_);
 
-    if (status != linalg::SolverStatus::Success) {
-      return status;
+    if (!result.success()) {
+      return result;
     }
 
-    status = solver_->factorize(A_);
+    result = solver_->factorize(A_);
 
-    if (status != linalg::SolverStatus::Success) {
-      return status;
+    if (!result.success()) {
+      return result;
     }
 
     initialized_ = true;
 
-    return linalg::SolverStatus::Success;
+    return {.status = linalg::SolverStatus::Success};
   }
 
   linalg::SolverResult step(field::CellField<double>& state) {
@@ -40,9 +40,9 @@ class TransientDiffusionSolver {
       throw std::invalid_argument("state belongs to another mesh");
     }
     if (!initialized_) {
-      const auto status = initialize();
-      if (status != linalg::SolverStatus::Success) {
-        return {.status = status};
+      const auto result = initialize();
+      if (!result.success()) {
+        return result;
       }
     }
 

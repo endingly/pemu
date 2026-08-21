@@ -114,6 +114,7 @@ class AdaptiveStepPlasmaSimulation {
 
     if (!result.success()) {
       if constexpr (tracing_enabled_) {
+        emitDiagnostic(result);
         emitSolverResult("step.failed", pemu::trace::Severity::Error, result);
       }
       return result;
@@ -371,6 +372,25 @@ class AdaptiveStepPlasmaSimulation {
                                     result.relative_residual},
     };
     emitTrace(name, severity, attributes);
+  }
+
+  void emitDiagnostic(const linalg::SolverResult& result) noexcept {
+    if (!result.diagnostic) {
+      return;
+    }
+
+    const std::array attributes{
+        pemu::trace::TraceAttribute{"step",
+                                    static_cast<std::uint64_t>(clock_.step())},
+        pemu::trace::TraceAttribute{"solver_status",
+                                    static_cast<std::int64_t>(result.status)},
+        pemu::trace::TraceAttribute{"residual_norm", result.residual_norm},
+        pemu::trace::TraceAttribute{"relative_residual",
+                                    result.relative_residual},
+    };
+    auto diagnostic = *result.diagnostic;
+    diagnostic.attributes = attributes;
+    trace_sink_(diagnostic);
   }
 
   void emitWorkspaceCompleted(std::string_view name,

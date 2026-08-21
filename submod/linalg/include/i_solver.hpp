@@ -1,7 +1,11 @@
 // linear_solver/i_solver.hpp
 #pragma once
 
+#include <pemu/trace/trace.hpp>
+
 #include "types.hpp"
+
+#include <optional>
 
 namespace pemu::linalg {
 
@@ -28,6 +32,7 @@ struct SolverResult {
 
   double residual_norm{0.0};
   double relative_residual{0.0};
+  std::optional<trace::TraceEvent> diagnostic{};
 
   [[nodiscard]]
   bool success() const noexcept {
@@ -39,9 +44,9 @@ class ISolver {
  public:
   virtual ~ISolver() = default;
 
-  virtual SolverStatus analyzePattern(const SparseMatrix& A) = 0;
+  virtual SolverResult analyzePattern(const SparseMatrix& A) = 0;
 
-  virtual SolverStatus factorize(const SparseMatrix& A) = 0;
+  virtual SolverResult factorize(const SparseMatrix& A) = 0;
 
   virtual SolverResult solve(ConstVectorRef b, VectorRef x) = 0;
 

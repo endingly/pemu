@@ -12,9 +12,9 @@ class CholmodSolver final : public ISolver {
 
   CholmodSolver() = default;
 
-  SolverStatus analyzePattern(const SparseMatrix& A) override;
+  SolverResult analyzePattern(const SparseMatrix& A) override;
 
-  SolverStatus factorize(const SparseMatrix& A) override;
+  SolverResult factorize(const SparseMatrix& A) override;
 
   SolverResult solve(ConstVectorRef b, VectorRef x) override;
 

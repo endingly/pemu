@@ -16,6 +16,7 @@ target_link_libraries(
     Eigen3::Eigen
     SuiteSparse::CHOLMOD_static
     SuiteSparse::UMFPACK_static
+    pemu::trace
 )
 
 if(BUILD_TESTING)

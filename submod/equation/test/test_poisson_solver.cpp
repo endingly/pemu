@@ -26,20 +26,20 @@ class CountingSolver final : public linalg::ISolver {
   int factorize_count{};
   int solve_count{};
 
-  linalg::SolverStatus analyzePattern(const linalg::SparseMatrix&) override {
+  linalg::SolverResult analyzePattern(const linalg::SparseMatrix&) override {
     ++analyze_count;
 
     analyzed_ = true;
 
-    return linalg::SolverStatus::Success;
+    return {.status = linalg::SolverStatus::Success};
   }
 
-  linalg::SolverStatus factorize(const linalg::SparseMatrix&) override {
+  linalg::SolverResult factorize(const linalg::SparseMatrix&) override {
     ++factorize_count;
 
     factorized_ = true;
 
-    return linalg::SolverStatus::Success;
+    return {.status = linalg::SolverStatus::Success};
   }
 
   linalg::SolverResult solve(linalg::ConstVectorRef b,
@@ -287,6 +287,11 @@ TEST_F(PoissonSolverTest, RejectsIncompatiblePureNeumannRhs) {
   const auto result = solver.solve(phi);
 
   EXPECT_EQ(result.status, linalg::SolverStatus::IncompatibleRhs);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_EQ(result.diagnostic->kind, trace::EventKind::Diagnostic);
+  EXPECT_EQ(result.diagnostic->domain, trace::DiagDomain::equation);
+  EXPECT_EQ(result.diagnostic->category, "poisson");
+  EXPECT_EQ(result.diagnostic->name, "incompatible_rhs");
   for (const double value : phi) {
     EXPECT_DOUBLE_EQ(value, 7.0);
   }
