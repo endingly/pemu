@@ -64,6 +64,12 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
     return field_metadata_;
   }
 
+  [[nodiscard]] const physics::SpeciesSet& species() const noexcept {
+    return *species_;
+  }
+
+  [[nodiscard]] const mesh::IMesh& mesh() const noexcept { return *mesh_; }
+
   [[nodiscard]] double transportCfl(physics::SpeciesId id) const {
     auto _ = species_->at(id);
     const auto index = static_cast<std::size_t>(id.value);

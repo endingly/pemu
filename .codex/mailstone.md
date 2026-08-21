@@ -15,15 +15,15 @@ Phase II — Robust Simulation
 ────────────────────────────────────
 M10 Adaptive timestep                   ✅
 M11 Diagnostics / Observability         ← NOW
-    M11.1 canonical unit convention - use mp-units
-    M11.2 2D physical-volume semantics
-    M11.3 scalar field statistics
-    M11.4 species diagnostics
-    M11.5 charge diagnostics
-    M11.6 field diagnostics
-    M11.7 timestep diagnostics
-    M11.8 structured logging
-    M11.9 failure diagnostics
+    M11.1 canonical unit convention - use mp-units ✅
+    M11.2 2D physical-volume semantics ✅
+    M11.3 scalar field statistics ✅
+    M11.4 species diagnostics ✅
+    M11.5 charge diagnostics ✅
+    M11.6 field diagnostics ✅
+    M11.7 timestep diagnostics ✅
+    M11.8 structured logging ✅
+    M11.9 failure diagnostics ✅
 
 M12 Output / checkpoint
 

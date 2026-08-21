@@ -3,7 +3,9 @@
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
+#include <pemu/simulation/detail/plasma_statistics.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
+#include <pemu/trace/statistics.hpp>
 #include <pemu/trace/trace.hpp>
 
 #include <algorithm>
@@ -34,7 +36,10 @@ class FixedStepPlasmaSimulation {
 
                             FixedStepClock clock,
 
-                            TraceSink trace_sink = {})
+                            TraceSink trace_sink = {},
+
+                            pemu::trace::StatisticsOptions
+                                statistics_options = {})
 
       : density_(&density),
 
@@ -47,6 +52,8 @@ class FixedStepPlasmaSimulation {
         clock_(std::move(clock)),
 
         trace_sink_(std::move(trace_sink)),
+
+        statistics_options_(statistics_options),
 
         reaction_rates_(density.mesh(), reaction_network.size(), 0.0,
                         transport_stepper.fieldMetadata().reaction_rate),
@@ -169,6 +176,7 @@ class FixedStepPlasmaSimulation {
 
     if constexpr (tracing_enabled_) {
       emitWorkspaceCompleted("sources.completed", source_.size());
+      emitStatisticsSnapshot();
     }
 
     // ----------------------------------------------------
@@ -402,6 +410,14 @@ class FixedStepPlasmaSimulation {
     emitTrace("step.completed", pemu::trace::Severity::Info, attributes);
   }
 
+  void emitStatisticsSnapshot() noexcept {
+    detail::emitPlasmaStatistics(
+        trace_sink_, transport_stepper_->species(), *density_,
+        transport_stepper_->chargeDensity(), transport_stepper_->potential(),
+        transport_stepper_->electricFieldNormal(), statistics_options_,
+        clock_.step(), clock_.time());
+  }
+
   template <std::size_t N>
   void emitTrace(
       std::string_view name, pemu::trace::Severity severity,
@@ -441,6 +457,13 @@ class FixedStepPlasmaSimulation {
           "simulation density must "
           "contain species");
     }
+
+    if (statistics_options_.enabled &&
+        (!statistics_options_.valid() ||
+         (density_->mesh().dimension() != 2 &&
+          density_->mesh().dimension() != 3))) {
+      throw std::invalid_argument("invalid plasma statistics configuration");
+    }
   }
 
  private:
@@ -471,6 +494,8 @@ class FixedStepPlasmaSimulation {
   FixedStepClock clock_;
 
   [[no_unique_address]] TraceSink trace_sink_;
+
+  pemu::trace::StatisticsOptions statistics_options_;
 
   // --------------------------------------------------------
   // Workspaces.

@@ -2,9 +2,12 @@
 
 #include <pemu/trace/diag.hpp>
 #include <pemu/trace/ostream_trace_sink.hpp>
+#include <pemu/trace/statistics.hpp>
 #include <pemu/trace/trace.hpp>
 
 #include <array>
+#include <cmath>
+#include <limits>
 #include <sstream>
 #include <streambuf>
 #include <utility>
@@ -41,6 +44,86 @@ TEST(TraceSinkTest, NullSinkAcceptsStructuredEvents) {
 
   NullTraceSink sink;
   EXPECT_NO_THROW(sink(event));
+}
+
+TEST(PhysicalVolumeSemanticsTest, Extrudes2DMeasuresAndKeeps3DMeasures) {
+  const PhysicalVolumeSemantics planar{
+      .mesh_dimension = 2,
+      .planar_depth = 2.5,
+  };
+  EXPECT_TRUE(planar.valid());
+  EXPECT_DOUBLE_EQ(planar.cellVolume(3.0), 7.5);
+  EXPECT_DOUBLE_EQ(planar.faceArea(4.0), 10.0);
+  EXPECT_STREQ(planar.name(), "planar_extrusion");
+
+  const PhysicalVolumeSemantics native_3d{
+      .mesh_dimension = 3,
+      .planar_depth = 99.0,
+  };
+  EXPECT_TRUE(native_3d.valid());
+  EXPECT_DOUBLE_EQ(native_3d.cellVolume(3.0), 3.0);
+  EXPECT_DOUBLE_EQ(native_3d.faceArea(4.0), 4.0);
+  EXPECT_STREQ(native_3d.name(), "native_3d");
+}
+
+TEST(StatisticsOptionsTest, SamplesOnlyAtConfiguredStepInterval) {
+  constexpr StatisticsOptions options{
+      .enabled = true,
+      .sample_every_steps = 3,
+      .planar_depth = 2.0,
+  };
+  static_assert(options.valid());
+  EXPECT_TRUE(options.shouldSample(0));
+  EXPECT_FALSE(options.shouldSample(1));
+  EXPECT_FALSE(options.shouldSample(2));
+  EXPECT_TRUE(options.shouldSample(3));
+
+  constexpr StatisticsOptions disabled{};
+  EXPECT_FALSE(disabled.shouldSample(0));
+  constexpr StatisticsOptions invalid{
+      .enabled = true,
+      .sample_every_steps = 0,
+  };
+  EXPECT_FALSE(invalid.valid());
+  EXPECT_FALSE(invalid.shouldSample(0));
+}
+
+TEST(ScalarFieldStatisticsTest, ComputesWeightedExtremaIntegralMeanAndRms) {
+  ScalarFieldStatisticsAccumulator accumulator;
+  accumulator.add(1.0, 2.0);
+  accumulator.add(3.0, 6.0);
+
+  const auto statistics = accumulator.finish();
+  EXPECT_TRUE(statistics.valid());
+  EXPECT_EQ(statistics.sample_count, 2u);
+  EXPECT_EQ(statistics.finite_count, 2u);
+  EXPECT_EQ(statistics.non_finite_count, 0u);
+  EXPECT_EQ(statistics.negative_count, 0u);
+  EXPECT_DOUBLE_EQ(statistics.minimum, 1.0);
+  EXPECT_DOUBLE_EQ(statistics.maximum, 3.0);
+  EXPECT_DOUBLE_EQ(statistics.max_abs, 3.0);
+  EXPECT_DOUBLE_EQ(statistics.weight_sum, 8.0);
+  EXPECT_DOUBLE_EQ(statistics.integral, 20.0);
+  EXPECT_DOUBLE_EQ(statistics.l1_integral, 20.0);
+  EXPECT_DOUBLE_EQ(statistics.weighted_mean, 2.5);
+  EXPECT_DOUBLE_EQ(statistics.weighted_rms, std::sqrt(7.0));
+}
+
+TEST(ScalarFieldStatisticsTest, ReportsNonFiniteValuesAndInvalidWeights) {
+  ScalarFieldStatisticsAccumulator accumulator;
+  accumulator.add(-2.0, 1.0);
+  accumulator.add(std::numeric_limits<double>::infinity(), 1.0);
+  accumulator.add(4.0, 0.0);
+
+  const auto statistics = accumulator.finish();
+  EXPECT_FALSE(statistics.valid());
+  EXPECT_EQ(statistics.sample_count, 3u);
+  EXPECT_EQ(statistics.finite_count, 2u);
+  EXPECT_EQ(statistics.non_finite_count, 1u);
+  EXPECT_EQ(statistics.negative_count, 1u);
+  EXPECT_EQ(statistics.invalid_weight_count, 1u);
+  EXPECT_DOUBLE_EQ(statistics.minimum, -2.0);
+  EXPECT_DOUBLE_EQ(statistics.maximum, 4.0);
 }
 
 TEST(TraceSinkTest, OstreamSinkFormatsTabularStructuredEvents) {

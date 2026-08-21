@@ -210,6 +210,16 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
     return transport_operator_.fieldMetadata();
   }
 
+  [[nodiscard]]
+  const physics::SpeciesSet& species() const noexcept {
+    return transport_operator_.species();
+  }
+
+  [[nodiscard]]
+  const mesh::IMesh& mesh() const noexcept {
+    return transport_operator_.mesh();
+  }
+
  private:
   detail::ExplicitMultiSpeciesDriftDiffusionOperator transport_operator_;
 

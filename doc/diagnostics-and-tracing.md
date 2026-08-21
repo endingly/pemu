@@ -3,7 +3,8 @@
 ## 1. 模块职责
 
 `pemu::trace` 是一个独立的小型模块。它定义结构化 trace 事件、按模块分类的诊断事件、
-严重级别、sink concept，以及少量通用 sink；不理解网格、场、物种、反应或求解器。
+严重级别、sink concept、通用标量统计器和少量通用 sink；不直接理解网格、场、物种、
+反应或求解器。simulation 的轻量适配层负责把这些领域对象逐项送入统计器。
 
 这个边界有意区分三类功能：
 
@@ -150,7 +151,12 @@ pemu::trace::OstreamTraceSink trace(std::clog);
 
 pemu::simulation::AdaptiveStepPlasmaSimulation simulation(
     density, reactions, transport, evaluator,
-    pemu::simulation::AdaptiveTimeClock(end_time), trace);
+    pemu::simulation::AdaptiveTimeClock(end_time), trace,
+    pemu::trace::StatisticsOptions{
+        .enabled = true,
+        .sample_every_steps = 10,
+        .planar_depth = 1.0,
+    });
 
 simulation.run();
 ```
@@ -171,25 +177,59 @@ simulation.run();
 | `step.failed` | 电静力求解返回失败状态时 | `solver_status`、残差 |
 | `reaction_rates.completed` | 反应率求值后 | 反应率场数 |
 | `sources.completed` | 化学计量累积为物种源项后 | 源项场数 |
+| `physics.species.statistics` | 输运更新前，每个已采样物种一次 | 极值、负值/非有限值计数、体积均值、粒子总数、RMS |
+| `physics.charge.statistics` | 输运更新前 | 空间电荷极值、净电荷、绝对电荷及相对不平衡度 |
+| `field.potential.statistics` | 输运更新前 | 电势极值、体积均值、RMS |
+| `field.electric_field_normal.statistics` | 输运更新前 | 面法向电场极值、最大绝对值、面积均值、RMS |
 | `timestep.selected` | 自适应推进完成步长选择与状态更新后 | `dt`、输运/正性/稳定性限制 |
 | `step.completed` | 状态更新成功且时钟提交后 | 新 `step`、新 `time`、实际 `dt`、相对残差 |
 | `run.completed` | 时钟到达终止条件后 | `step`、`time`、`end_time` |
 | `run.failed` | `run()` 收到失败的 `SolverResult` 后 | `step`、`time`、`end_time` |
 
-这里需要特别注意时间层：`step.completed` 中的密度已经是 $n^{k+1}$，但电势、电场、
-反应率和源项仍是用于本次推进的 $k$ 层工作量。trace 目前只输出标量状态，因此没有把
-二者误包装成同一时刻的场快照。
+这里需要特别注意时间层：四类 statistics 事件位于电静力、反应率和源项均完成之后，
+但在输运更新之前，因此全部描述同一个 $k$ 层状态。`step.completed` 中的密度已经是
+$n^{k+1}$，而电势、电场、反应率和源项仍是用于本次推进的 $k$ 层工作量。
 
 若电静力返回诊断，事件顺序为“底层根因 diagnostic → `step.failed`”。固定步长和自适应
 仿真都遵循这一顺序，并且失败步不会提交时钟。
 
-## 6. 中间场诊断的扩展方式
+## 6. 物理体积与场统计
 
-若以后需要追踪每步的粒子总数、最小密度、最大电场或电荷守恒误差，应增加显式的
-diagnostic probe：probe 在 simulation 的阶段边界读取只读场，计算少量标量，再通过
-`EventKind::Trace` 事件输出连续观测值；发现异常时则生成 `EventKind::Diagnostic`
-事件。因为场扫描是 $O(N)$ 操作，它必须是选择性启用的，不能为了空 `NullTraceSink`
-每一步无条件计算。
+### 6.1 二维物理体积语义
+
+二维网格接口中的 `cellVolume()` 实际返回单元面积 $A_c$，`faceArea()` 返回面长度
+$\ell_f$。为使单位为 $\mathrm{cm}^{-3}$ 的数密度能够积分为粒子数，统计器把二维网格
+解释成面外厚度为 $L_z$ 的平板：
+
+$$
+V_c=A_cL_z,\qquad A_f=\ell_fL_z.
+$$
+
+`StatisticsOptions::planar_depth` 就是 $L_z$，其单位必须与网格坐标单位一致；厘米网格传
+入 `1.0` 表示 $1\,\mathrm{cm}$ 厚度。三维网格直接使用原生单元体积与面面积，并忽略
+该参数。事件中的 `volume_semantics=planar_extrusion` 或 `native_3d` 明示所用约定。
+
+### 6.2 通用标量统计
+
+`ScalarFieldStatisticsAccumulator` 逐样本累积，不分配与网格规模相关的临时数组，并用
+补偿求和降低大范围数值相加的舍入误差。对值 $u_i$ 和物理权重 $w_i$，它计算
+
+$$
+I=\sum_iw_iu_i,\qquad
+\bar u=\frac{I}{\sum_iw_i},\qquad
+u_{\mathrm{rms}}=\sqrt{\frac{\sum_iw_iu_i^2}{\sum_iw_i}},
+$$
+
+以及最小值、最大值、最大绝对值、$L^1$ 积分、负值数、非有限值数和非法权重数。
+species 的 `total_number` 是数密度的体积积分；charge 的 `net_charge` 是空间电荷密度
+的体积积分，`relative_imbalance=|Q|/\int|\rho|\,dV`。
+
+正常统计作为 `Debug/Trace` 事件输出。物种密度出现负值时升级为 `Warning/Diagnostic`；
+任意场出现 NaN、无穷值、非法物理权重或无有效统计量时升级为 `Error/Diagnostic`。
+
+统计扫描的成本为每个采样步 $O(N_sN_c+N_f)$，因此默认关闭。启用后可用
+`sample_every_steps` 独立控制采样频率；`NullTraceSink` 路径通过 `if constexpr` 完全
+跳过事件和统计构造。
 
 大规模场结果则走独立 output 管线。建议由 simulation 在“初始状态”“每隔若干步”及
 “终止状态”提供一致的 snapshot 观察点，output 模块负责深拷贝或同步写出。日志过滤、

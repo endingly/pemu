@@ -1830,7 +1830,10 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
                                           transport,
                                           evaluator,
                                           AdaptiveTimeClock(end_time_s),
-                                          trace_sink);
+                                          trace_sink,
+                                          {.enabled = true,
+                                           .sample_every_steps = 1,
+                                           .planar_depth = domain_length_cm});
 
   simulation.run();
 
@@ -1872,6 +1875,20 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
     EXPECT_GT(simulation.source()[electron][cell], 0.0);
     EXPECT_GT(simulation.source()[ion][cell], 0.0);
   }
+
+  trace_output.close();
+  std::ifstream trace_input("test.log");
+  ASSERT_TRUE(trace_input.is_open());
+  std::ostringstream trace_contents;
+  trace_contents << trace_input.rdbuf();
+  const std::string trace_text = trace_contents.str();
+  EXPECT_NE(trace_text.find("physics.species.statistics"), std::string::npos);
+  EXPECT_NE(trace_text.find("physics.charge.statistics"), std::string::npos);
+  EXPECT_NE(trace_text.find("field.potential.statistics"), std::string::npos);
+  EXPECT_NE(trace_text.find("field.electric_field_normal.statistics"),
+            std::string::npos);
+  EXPECT_NE(trace_text.find("volume_semantics=planar_extrusion"),
+            std::string::npos);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulation64x64Test,

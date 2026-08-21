@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 188 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 192 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -9,6 +9,10 @@
 | 用例 | 保证 |
 | --- | --- |
 | `TraceSinkTest.NullSinkAcceptsStructuredEvents` | 默认空 sink 满足 trace concept，能同步接受结构化事件且不产生副作用。 |
+| `PhysicalVolumeSemanticsTest.Extrudes2DMeasuresAndKeeps3DMeasures` | 二维网格的单元面积/面长度乘以面外厚度得到物理体积/面积，而三维网格保持原生几何测度。 |
+| `StatisticsOptionsTest.SamplesOnlyAtConfiguredStepInterval` | 统计探针只在启用且步号满足采样间隔时运行，并拒绝零间隔等非法配置。 |
+| `ScalarFieldStatisticsTest.ComputesWeightedExtremaIntegralMeanAndRms` | 标量统计器在非均匀物理权重下正确计算极值、最大绝对值、积分、L1 积分、加权均值和 RMS。 |
+| `ScalarFieldStatisticsTest.ReportsNonFiniteValuesAndInvalidWeights` | 标量统计器显式计数负值、非有限值和非法物理权重，不把异常样本静默混入积分。 |
 | `TraceSinkTest.OstreamSinkFormatsTabularStructuredEvents` | ostream sink 将严重级别、类别、事件名和常用数值属性对齐为带表头的列；其余属性留在详情列，并报告流状态。 |
 | `TraceSinkTest.OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd` | ostream sink 在每两个 simulation 完成步后刷新文件流，并在正常或失败结束时刷新不足两个时间步的尾部记录。 |
 | `EnumStringTest.DomainsAndSeveritiesHaveStableNames` | `DiagDomain` 与 `Severity` 均通过 `pemu::to_string` 映射为稳定、可读的字符串，可供过滤和机器处理使用。 |
@@ -262,5 +266,5 @@
 | `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
-| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的单位元数据传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试还将结构化 trace 写入其当前工作目录的 `test.log`，便于在终端宽度受限时查看。 |
+| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的单位元数据传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，确认 species、charge、potential 和 electric-field 事件均写入当前工作目录的 `test.log`。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep` | 使用与上述 \(0/400\,\mathrm{V}\) 厘米网格、电离反应和初始物种完全相同的配置；先以真实 CHOLMOD 完成一个物理时间步，再注入一次底层求解失败，验证 `linalg` 域 diagnostic、可读的 `SolveFailed` 状态与根因消息先于 simulation 失败事件输出。结构化失败 trace 写入当前工作目录的 `test.diag.log`。 |

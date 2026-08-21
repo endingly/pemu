@@ -39,7 +39,7 @@ field + boundary + mesh + physics ──┴─► discretization ─► equation
 - `mesh`：几何、拓扑与边界物理组；
 - `unit`：mp-units interface、项目级 quantity specification 及运行时单位元数据；
 - `field`：单元/面标量容器、强类型 ID 场集合及场单位元数据；
-- `trace`：结构化执行事件、sink concept 与通用同步 sink；
+- `trace`：结构化执行事件、sink concept、无领域依赖的物理测度/标量统计器与通用同步 sink；
 - `boundary`：Dirichlet、Neumann 及其集合；
 - `discretization`：扩散、散度、迎风通量、泊松装配和后向欧拉装配；
 - `linalg`：Eigen 稀疏矩阵类型与求解器统一接口；公共阶段统一返回可附带根因 diagnostic
