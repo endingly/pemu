@@ -67,11 +67,10 @@ class AdaptiveStepPlasmaSimulation {
           "simulation density must "
           "contain species");
     }
-    if (statistics_options_.enabled &&
-        (!statistics_options_.valid() ||
-         (density.mesh().dimension() != 2 && density.mesh().dimension() != 3))) {
-      throw std::invalid_argument("invalid plasma statistics configuration");
-    }
+    detail::validatePlasmaStatisticsConfiguration(
+        statistics_options_, *density_, transport_stepper_->chargeDensity(),
+        transport_stepper_->potential(),
+        transport_stepper_->electricFieldNormal());
   }
 
   AdaptiveStepPlasmaSimulation(const AdaptiveStepPlasmaSimulation&) = delete;

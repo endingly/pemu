@@ -47,18 +47,23 @@ TEST(TraceSinkTest, NullSinkAcceptsStructuredEvents) {
 }
 
 TEST(PhysicalVolumeSemanticsTest, Extrudes2DMeasuresAndKeeps3DMeasures) {
+  using namespace units;
   const PhysicalVolumeSemantics planar{
       .mesh_dimension = 2,
       .planar_depth = 2.5,
+      .mesh_length_unit = precise::cm,
   };
   EXPECT_TRUE(planar.valid());
   EXPECT_DOUBLE_EQ(planar.cellVolume(3.0), 7.5);
   EXPECT_DOUBLE_EQ(planar.faceArea(4.0), 10.0);
   EXPECT_STREQ(planar.name(), "planar_extrusion");
+  EXPECT_EQ(planar.cellWeightUnit(), precise::cm.pow(3));
+  EXPECT_EQ(planar.faceWeightUnit(), precise::cm.pow(2));
 
   const PhysicalVolumeSemantics native_3d{
       .mesh_dimension = 3,
       .planar_depth = 99.0,
+      .mesh_length_unit = precise::m,
   };
   EXPECT_TRUE(native_3d.valid());
   EXPECT_DOUBLE_EQ(native_3d.cellVolume(3.0), 3.0);
@@ -67,11 +72,9 @@ TEST(PhysicalVolumeSemanticsTest, Extrudes2DMeasuresAndKeeps3DMeasures) {
 }
 
 TEST(StatisticsOptionsTest, SamplesOnlyAtConfiguredStepInterval) {
-  constexpr StatisticsOptions options{
-      .enabled = true,
-      .sample_every_steps = 3,
-      .planar_depth = 2.0,
-  };
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+  constexpr StatisticsOptions options{true, 3, 2.0 * cm, isq::length[cm]};
   static_assert(options.valid());
   EXPECT_TRUE(options.shouldSample(0));
   EXPECT_FALSE(options.shouldSample(1));
@@ -80,10 +83,7 @@ TEST(StatisticsOptionsTest, SamplesOnlyAtConfiguredStepInterval) {
 
   constexpr StatisticsOptions disabled{};
   EXPECT_FALSE(disabled.shouldSample(0));
-  constexpr StatisticsOptions invalid{
-      .enabled = true,
-      .sample_every_steps = 0,
-  };
+  constexpr StatisticsOptions invalid{true, 0, 1.0 * cm, isq::length[cm]};
   EXPECT_FALSE(invalid.valid());
   EXPECT_FALSE(invalid.shouldSample(0));
 }
@@ -107,6 +107,22 @@ TEST(ScalarFieldStatisticsTest, ComputesWeightedExtremaIntegralMeanAndRms) {
   EXPECT_DOUBLE_EQ(statistics.l1_integral, 20.0);
   EXPECT_DOUBLE_EQ(statistics.weighted_mean, 2.5);
   EXPECT_DOUBLE_EQ(statistics.weighted_rms, std::sqrt(7.0));
+  EXPECT_EQ(statistics.value_unit, units::precise::one);
+  EXPECT_EQ(statistics.weight_unit, units::precise::one);
+  EXPECT_EQ(statistics.integralUnit(), units::precise::one);
+}
+
+TEST(ScalarFieldStatisticsTest, DerivesIntegralUnitOutsideSampleLoop) {
+  ScalarFieldStatisticsAccumulator accumulator;
+  accumulator.add(2.0, 4.0);
+
+  const auto statistics = accumulator.finish(
+      units::precise::C / units::precise::cm.pow(3), units::precise::cm.pow(3));
+  EXPECT_EQ(statistics.value_unit,
+            units::precise::C / units::precise::cm.pow(3));
+  EXPECT_EQ(statistics.weight_unit, units::precise::cm.pow(3));
+  EXPECT_EQ(statistics.integralUnit(), units::precise::C);
+  EXPECT_DOUBLE_EQ(statistics.integral, 8.0);
 }
 
 TEST(ScalarFieldStatisticsTest, ReportsNonFiniteValuesAndInvalidWeights) {
@@ -133,7 +149,8 @@ TEST(TraceSinkTest, OstreamSinkFormatsTabularStructuredEvents) {
       TraceAttribute{"finished", true},
       TraceAttribute{"offset", std::int64_t{-2}},
       TraceAttribute{"state", std::string_view{"running"}},
-      TraceAttribute{"solver_status", std::string_view{"PatternAnalysisFailed"}},
+      TraceAttribute{"solver_status",
+                     std::string_view{"PatternAnalysisFailed"}},
   };
   const TraceEvent event{
       .domain = DiagDomain::simulation,
@@ -148,14 +165,35 @@ TEST(TraceSinkTest, OstreamSinkFormatsTabularStructuredEvents) {
   sink(event);
 
   EXPECT_NE(output.str().find("LEVEL    | EVENT"), std::string::npos);
-  EXPECT_NE(output.str().find("Info     | simulation.fixed_step.step.completed"),
-            std::string::npos);
+  EXPECT_NE(
+      output.str().find("Info     | simulation.fixed_step.step.completed"),
+      std::string::npos);
   EXPECT_NE(output.str().find("|    3 |            0.25"), std::string::npos);
   EXPECT_NE(output.str().find("finished=true; offset=-2; state=running"),
             std::string::npos);
   EXPECT_NE(output.str().find("|    PatternAnalysisFailed |"),
             std::string::npos);
   EXPECT_FALSE(sink.failed());
+}
+
+TEST(TraceSinkTest, OstreamSinkFormatsAttributeUnits) {
+  const std::array attributes{
+      TraceAttribute{"minimum", 1.25, units::precise::V / units::precise::cm},
+      TraceAttribute{"integral", 5.0, units::precise::C},
+  };
+  const TraceEvent event{
+      .domain = DiagDomain::field,
+      .category = "electric_field_normal",
+      .name = "statistics",
+      .attributes = attributes,
+  };
+  std::ostringstream output;
+  OstreamTraceSink sink(output);
+
+  sink(event);
+
+  EXPECT_NE(output.str().find("minimum=1.25 [V/cm]"), std::string::npos);
+  EXPECT_NE(output.str().find("integral=5 [C]"), std::string::npos);
 }
 
 TEST(TraceSinkTest, OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd) {
@@ -251,9 +289,10 @@ TEST(TraceSinkTest, OstreamSinkFormatsDiagnosticEvent) {
 
   EXPECT_NE(output.str().find("Warning  | equation.poisson.not_converged"),
             std::string::npos);
-  EXPECT_NE(output.str().find("linear solve did not converge; residual=1.25e-06; "
-                               "iterations=7"),
-            std::string::npos);
+  EXPECT_NE(
+      output.str().find("linear solve did not converge; residual=1.25e-06; "
+                        "iterations=7"),
+      std::string::npos);
   EXPECT_FALSE(sink.failed());
 }
 

@@ -14,7 +14,7 @@ M9  Simulation / TimeLoop                ✅
 Phase II — Robust Simulation
 ────────────────────────────────────
 M10 Adaptive timestep                   ✅
-M11 Diagnostics / Observability         ← NOW
+M11 Diagnostics / Observability         ✅
     M11.1 canonical unit convention - use mp-units ✅
     M11.2 2D physical-volume semantics ✅
     M11.3 scalar field statistics ✅
@@ -25,7 +25,7 @@ M11 Diagnostics / Observability         ← NOW
     M11.8 structured logging ✅
     M11.9 failure diagnostics ✅
 
-M12 Output / checkpoint
+M12 Output / checkpoint                 ← NOW
 
 
 Phase III — Better Plasma Physics

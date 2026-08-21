@@ -1281,6 +1281,29 @@ TEST_F(FixedStepPlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
   EXPECT_THROW((void)simulation.advanceOneStep(), std::out_of_range);
 }
 
+TEST_F(FixedStepPlasmaSimulationTest,
+       StatisticsRejectFieldsWithoutPhysicalMetadata) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  constexpr double dt = 0.01;
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+
+  EXPECT_THROW(
+      FixedStepPlasmaSimulation(
+          density, reactions, transport, NoReactionEvaluator{},
+          FixedStepClock(dt, 1), trace::NullTraceSink{},
+          trace::StatisticsOptions{true, 1, 1.0 * cm, isq::length[cm]}),
+      std::invalid_argument);
+}
+
 TEST(AdaptiveTimeClockTest, LandsExactlyOnEndTime) {
   AdaptiveTimeClock clock(0.1);
 
@@ -1799,14 +1822,16 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ASSERT_TRUE(density[electron].metadata().hasPhysicalQuantity());
   ASSERT_TRUE(transport.potential().metadata().hasPhysicalQuantity());
   ASSERT_TRUE(transport.electricFieldNormal().metadata().hasPhysicalQuantity());
-  EXPECT_TRUE(density[electron].metadata().physical_quantity->represents(
-      pemu::unit::plasma_quantity::particle_number_density,
-      number_density_unit));
-  EXPECT_TRUE(transport.potential().metadata().physical_quantity->represents(
-      isq::electric_potential, V));
-  EXPECT_TRUE(
-      transport.electricFieldNormal().metadata().physical_quantity->represents(
-          pemu::unit::plasma_quantity::normal_electric_field_strength, V / cm));
+  EXPECT_EQ(*density[electron].metadata().physical_quantity,
+            pemu::unit::bridgeReference(
+                pemu::unit::plasma_quantity::particle_number_density
+                    [number_density_unit]));
+  EXPECT_EQ(*transport.potential().metadata().physical_quantity,
+            pemu::unit::bridgeReference(isq::electric_potential[V]));
+  EXPECT_EQ(
+      *transport.electricFieldNormal().metadata().physical_quantity,
+      pemu::unit::bridgeReference(
+          pemu::unit::plasma_quantity::normal_electric_field_strength[V / cm]));
 
   const double initial_integrated_density =
       integratedDensity(mesh_, density[electron]);
@@ -1825,15 +1850,11 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   std::ofstream trace_output("test.log");
   ASSERT_TRUE(trace_output.is_open());
   trace::OstreamTraceSink trace_sink(trace_output);
-  AdaptiveStepPlasmaSimulation simulation(density,
-                                          reactions,
-                                          transport,
-                                          evaluator,
-                                          AdaptiveTimeClock(end_time_s),
-                                          trace_sink,
-                                          {.enabled = true,
-                                           .sample_every_steps = 1,
-                                           .planar_depth = domain_length_cm});
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
+      trace_sink,
+      trace::StatisticsOptions{true, 1, domain_length_cm * cm,
+                               isq::length[cm]});
 
   simulation.run();
 
@@ -1842,15 +1863,15 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ASSERT_TRUE(
       simulation.reactionRates()[ionization].metadata().hasPhysicalQuantity());
   ASSERT_TRUE(simulation.source()[electron].metadata().hasPhysicalQuantity());
-  EXPECT_TRUE(simulation.reactionRates()[ionization]
-                  .metadata()
-                  .physical_quantity->represents(
-                      pemu::unit::plasma_quantity::reaction_rate_density,
-                      one / (cubic(cm) * s)));
-  EXPECT_TRUE(
-      simulation.source()[electron].metadata().physical_quantity->represents(
-          pemu::unit::plasma_quantity::particle_number_density_rate,
-          one / (cubic(cm) * s)));
+  EXPECT_EQ(
+      *simulation.reactionRates()[ionization].metadata().physical_quantity,
+      pemu::unit::bridgeReference(
+          pemu::unit::plasma_quantity::reaction_rate_density[one /
+                                                             (cubic(cm) * s)]));
+  EXPECT_EQ(*simulation.source()[electron].metadata().physical_quantity,
+            pemu::unit::bridgeReference(
+                pemu::unit::plasma_quantity::particle_number_density_rate
+                    [one / (cubic(cm) * s)]));
   EXPECT_NEAR(simulation.time(), end_time_s, 1.0e-18);
   EXPECT_GT(simulation.step(), 1u);
   EXPECT_LT(simulation.lastTimeStep(), max_time_step_s);
@@ -1888,6 +1909,12 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   EXPECT_NE(trace_text.find("field.electric_field_normal.statistics"),
             std::string::npos);
   EXPECT_NE(trace_text.find("volume_semantics=planar_extrusion"),
+            std::string::npos);
+  EXPECT_NE(trace_text.find("physical_volume=1 [mL]"), std::string::npos);
+  EXPECT_NE(trace_text.find("total_number=1e+06 [1]"), std::string::npos);
+  EXPECT_NE(trace_text.find("net_charge=0 [C]"), std::string::npos);
+  EXPECT_NE(trace_text.find("minimum=3.125 [V]"), std::string::npos);
+  EXPECT_NE(trace_text.find("physical_face_area=130 [cm^2]"),
             std::string::npos);
 }
 

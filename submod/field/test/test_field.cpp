@@ -160,10 +160,9 @@ TEST_F(FieldTest, FieldSetGroupsTypedFieldsAndPropagatesMetadata) {
   EXPECT_FALSE(fields.empty());
   EXPECT_EQ(&fields.mesh(), &mesh_);
   EXPECT_EQ(fields.span().size(), 2u);
-  EXPECT_TRUE(fields[TestFieldId{0}].metadata().physical_quantity->represents(
-      isq::repetency, one / m));
-  EXPECT_TRUE(fields[TestFieldId{1}].metadata().physical_quantity->represents(
-      isq::repetency, one / m));
+  const auto expected = pemu::unit::bridgeReference(isq::repetency[one / m]);
+  EXPECT_EQ(*fields[TestFieldId{0}].metadata().physical_quantity, expected);
+  EXPECT_EQ(*fields[TestFieldId{1}].metadata().physical_quantity, expected);
 
   fields[TestFieldId{0}][mesh::CellId{0}] = 9.0;
   EXPECT_DOUBLE_EQ(fields[TestFieldId{0}][mesh::CellId{0}], 9.0);
@@ -202,9 +201,38 @@ TEST_F(FieldTest, PhysicalQuantityIsMetadataAndRawStorageRemainsDouble) {
 
   ASSERT_TRUE(field.metadata().hasPhysicalQuantity());
   EXPECT_EQ(field.metadata().name, "potential");
-  EXPECT_EQ(field.metadata().physical_quantity->unitSymbol(), "V");
-  EXPECT_TRUE(field.metadata().physical_quantity->represents(
-      isq::electric_potential, V));
+  EXPECT_EQ(field.metadata().physical_quantity->kind(),
+            pemu::unit::QuantityKind::electric_potential);
+  EXPECT_EQ(field.metadata().physical_quantity->unit(), units::precise::V);
+  static_assert(
+      std::is_trivially_copyable_v<pemu::unit::PhysicalQuantityMetadata>);
+}
+
+TEST_F(FieldTest, MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  constexpr auto density = pemu::unit::bridgeReference(
+      pemu::unit::plasma_quantity::particle_number_density[one / cubic(cm)]);
+  constexpr auto charge =
+      pemu::unit::bridgeReference(isq::electric_charge_density[C / cubic(cm)]);
+  constexpr auto electric_field = pemu::unit::bridgeReference(
+      pemu::unit::plasma_quantity::normal_electric_field_strength[V / cm]);
+
+  static_assert(density.kind() ==
+                pemu::unit::QuantityKind::particle_number_density);
+  EXPECT_EQ(density.unit(), units::precise::one / units::precise::cm.pow(3));
+  static_assert(charge.kind() ==
+                pemu::unit::QuantityKind::electric_charge_density);
+  EXPECT_EQ(charge.unit(), units::precise::C / units::precise::cm.pow(3));
+  static_assert(electric_field.kind() ==
+                pemu::unit::QuantityKind::normal_electric_field_strength);
+  EXPECT_EQ(electric_field.unit(), units::precise::V / units::precise::cm);
+
+  EXPECT_EQ(pemu::to_string(density.kind()), "particle_number_density");
+  EXPECT_EQ(pemu::to_string(charge.kind()), "electric_charge_density");
+  EXPECT_EQ(pemu::to_string(electric_field.kind()),
+            "normal_electric_field_strength");
 }
 
 TEST_F(FieldTest, QuantityBoundaryConvertsToFieldStorageUnit) {

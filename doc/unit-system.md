@@ -2,33 +2,35 @@
 
 ## 1. 设计目标
 
-本项目使用 mp-units 处理数值模块边界上的量纲和单位换算，但不把
-`mp_units::quantity` 放入有限体积循环、稀疏矩阵或线性求解器。其基本分层是：
+本项目以 mp-units 作为编译期量纲与单位的唯一真相源，并以 LLNL Units 的
+`units::precise_unit` 作为边界之后的运行期单位表示，但不把任何 quantity 或 unit
+放入有限体积循环、稀疏矩阵或线性求解器。其基本分层是：
 
 $$
-\text{带单位的输入}
-\xrightarrow{\text{mp-units 检查与换算}}
-\texttt{Field<double> 中的约定单位数值}
-\xrightarrow{\text{核心数值运算}}
-\text{带单位的输出视图}.
+\text{mp-units reference}
+\xrightarrow{\text{构造时一次性 bridge}}
+(\texttt{QuantityKind},\ \texttt{precise\_unit})+\texttt{Field<double>}
+\xrightarrow{\text{纯 double 核心}}
+\text{带运行期单位的统计与输出}.
 $$
 
 这样做同时满足两点：
 
-- 配置、测试、I/O 和后处理处可以写出明确的物理单位，并由编译器检查换算是否合法；
+- metadata 构造前的单位定义和相容性由 mp-units 在编译期检查；
+- 统计、trace 和后续 output 可以在运行期组合、比较和格式化单位；
 - 核心代数仍处理连续的 `double` 数组，不改变 Eigen、SuiteSparse 和有限体积算子的标量类型。
 
-mp-units 通过 vcpkg 引入，当前锁定基线提供 2.5.0。项目通过纯 interface 目标
-`pemu::unit` 统一引入 `mp-units::mp-units`；`field` 通过 `pemu::unit` 使用单位能力，
-而 `unit` 不依赖 `field`、`mesh` 或 `physics`。
+mp-units 2.5.0 与 LLNL Units 0.13.1 均通过 vcpkg 引入。纯 interface 目标
+`pemu::unit` 统一提供两者；`field` 和 `trace` 依赖 `pemu::unit`，而 `unit` 不依赖
+`field`、`mesh`、`physics` 或 `simulation`。
 
 ## 2. `FieldMetadata`
 
 `CellField<T>` 与 `FaceField<T>` 都拥有一个 `FieldMetadata`，其中可记录：
 
 - 字段实例名称，例如 `electron density`；
-- 可选的 `pemu::unit::PhysicalQuantityMetadata`，它对 mp-units 的 quantity specification 和 unit
-  进行类型擦除，并缓存由 mp-units 自动生成的单位符号。
+- 可选的 `pemu::unit::PhysicalQuantityMetadata`，其中只保存语义枚举
+  `QuantityKind` 与 LLNL `units::precise_unit`。
 
 物理量不再以 `"electric potential"` 之类的字符串重复记录。构造元数据时直接传入完整的
 mp-units reference：
@@ -38,8 +40,13 @@ field::makeFieldMetadata("potential", isq::electric_potential[V]);
 ```
 
 其中 `isq::electric_potential` 是 quantity specification，`V` 是 unit。表达式
-`isq::electric_potential[V]` 由 mp-units 检查物理量与单位是否相容；元数据中的单位符号也由
-`mp_units::unit_symbol` 生成，调用者没有第二份可以写错的物理量名称或单位符号。
+`isq::electric_potential[V]` 先由 mp-units 检查物理量与单位是否相容；随后
+`bridgeReference` 根据它的 C++ 类型直接生成
+`QuantityKind::electric_potential + units::precise::V`。
+
+桥接不调用 `mp_units::unit_symbol`，也不调用 LLNL 的 `unit_from_string`。也就是说，单位符号
+不是两个库之间的主协议；桥接表中没有登记的 quantity specification 或 unit 会触发编译期
+错误。扩展新单位时必须显式审查并补充 `mp_units_bridge.hpp`，不能依靠字符串恰好可解析。
 
 没有指定元数据的旧构造方式仍然有效，因此无量纲制造解和旧测试不必伪装成有量纲问题。
 元数据按“每个场一份”存储，不随单元或面重复；访问
@@ -87,8 +94,10 @@ const auto value = field::quantityAt(x, mesh::CellId{0}, centimetre_length);
 const double metres = value.numerical_value_in(m);
 ```
 
-调用边界适配器时必须给出字段实际的 mp-units reference。如果元数据缺失，或者请求的
-quantity specification 或 unit 与元数据不一致，接口会抛出 `std::invalid_argument`。因此，
+调用边界适配器时必须给出字段实际的 mp-units reference。该 reference 会经过同一个
+编译期 bridge，再与 metadata 中的 `QuantityKind + precise_unit` 比较。如果元数据缺失，
+或者请求的 quantity specification 或 unit 与元数据不一致，接口会抛出
+`std::invalid_argument`。因此，
 即便两个物理量恰好使用相同单位，也不能在边界处静默互换。单位转换发生在传入的 quantity
 与 reference 的存储单位之间；核心数组中不会保存逐元素 quantity 对象。
 
@@ -128,7 +137,39 @@ $$
 随后仅在构造现有求解器参数时通过 `numerical_value_in(...)` 提取厘米制裸值。这正是单位
 系统和核心代数之间的边界。
 
-## 5. 有意保留的边界
+## 5. 统计中的运行期单位
+
+统计配置也必须从 mp-units reference 建立网格坐标单位。例如，厘米坐标、面外厚度
+$1\,\mathrm{cm}$ 的配置为：
+
+```cpp
+trace::StatisticsOptions{
+    true, 10, 1.0 * cm, isq::length[cm]
+};
+```
+
+构造时，面外厚度先换算成网格坐标单位下的一个 `double`，长度 reference 则一次性桥接成
+`precise_unit`。二维扫描仍只执行
+`accumulator.add(field_value, geometric_weight)`，这里两个参数都是 `double`。扫描之外，统计
+结果对象保存每场一份 `value_unit` 与 `weight_unit`，并推导：
+
+$$
+[u_{\min}]=[u_{\max}]=[\bar u]=[u_{\mathrm{rms}}]=[u],
+\qquad
+[I]=[u][w].
+$$
+
+单元统计的 $[w]$ 为长度单位三次方，面统计的 $[w]$ 为长度单位二次方。因此
+$\mathrm{C/cm^3}\times\mathrm{cm^3}=\mathrm C$，而
+$\mathrm{cm^{-3}}\times\mathrm{cm^3}=1$。`TraceAttribute` 可选地按值携带一个
+`precise_unit`，`OstreamTraceSink` 在最终格式化时输出 `value [unit]`。累加器的 `add` 路径
+本身不持有或接收单位；单位只在 `finish(value_unit, weight_unit)` 时附加。
+
+LLNL Units 会选择自己的等价规范形式，例如 $\mathrm{cm^3}$ 可能输出为 `mL`，
+$\mathrm{C/cm^3}$ 可能输出为 `kC/L`；量纲、倍率和可转换性不变。无量纲量由本项目明确
+显示成 `[1]`，避免空单位 `[]` 难以辨认。
+
+## 6. 有意保留的边界
 
 当前实现不在每次加法、乘法或散度计算中动态检查单位。核心算子仍依靠其数学契约，例如
 扩散通量函数的输入必须已经使用同一套约定单位。原因是这些调用位于高频数值路径，且其
@@ -141,6 +182,6 @@ $$
 - I/O 或后处理把 $\mathrm{V/cm}$ 标成 $\mathrm{V/m}$；
 - 把速度字段误当作电场字段通过单位边界接口读取。
 
-尚未覆盖的工作包括：网格自身的长度元数据、边界条件值的单位元数据、序列化单位信息，
+尚未覆盖的工作包括：网格对象自身的长度元数据、边界条件值的单位元数据、序列化单位信息，
 以及为每一种物种分别保存更具体的字段名称。这些都可以沿同一边界适配方式扩展，无需改变
 核心矩阵和场数据的表示。

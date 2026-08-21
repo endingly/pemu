@@ -6,6 +6,7 @@
   "dependencies": [
     "fmt",
     "gtest",
+    "llnl-units",
     "mp-units",
     "suitesparse-umfpack",
     "eigen3",

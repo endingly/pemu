@@ -2,8 +2,11 @@
 
 #include <pemu/trace/diag.hpp>
 
+#include <llnl-units/units.hpp>
+
 #include <concepts>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <variant>
@@ -57,6 +60,7 @@ using TraceValue =
 struct TraceAttribute {
   std::string_view name;
   TraceValue value;
+  std::optional<units::precise_unit> unit{};
 };
 
 // TraceEvent and its attributes are non-owning views. A sink must consume them

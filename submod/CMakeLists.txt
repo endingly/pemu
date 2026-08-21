@@ -1,9 +1,9 @@
 include(pemu_register_public_headers)
 
+add_subdirectory(unit)
 add_subdirectory(trace)
 add_subdirectory(linalg)
 add_subdirectory(mesh)
-add_subdirectory(unit)
 add_subdirectory(field)
 add_subdirectory(boundary)
 add_subdirectory(discretization)

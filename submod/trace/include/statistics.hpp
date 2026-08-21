@@ -1,5 +1,9 @@
 #pragma once
 
+#include <pemu/unit/mp_units_bridge.hpp>
+
+#include <mp-units/framework/quantity.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -15,10 +19,11 @@ namespace pemu::trace {
 struct PhysicalVolumeSemantics {
   int mesh_dimension{};
   double planar_depth{1.0};
+  units::precise_unit mesh_length_unit{units::precise::one};
 
   [[nodiscard]] constexpr bool valid() const noexcept {
-    return (mesh_dimension == 2 && planar_depth > 0.0) ||
-           mesh_dimension == 3;
+    return numericSemanticsValid() &&
+           mesh_length_unit.is_convertible(units::precise::m);
   }
 
   [[nodiscard]] double cellVolume(double mesh_cell_measure) const noexcept {
@@ -33,27 +38,75 @@ struct PhysicalVolumeSemantics {
     return mesh_dimension == 2 ? "planar_extrusion" : "native_3d";
   }
 
+  [[nodiscard]] constexpr units::precise_unit cellWeightUnit() const noexcept {
+    return mesh_length_unit.pow(3);
+  }
+
+  [[nodiscard]] constexpr units::precise_unit faceWeightUnit() const noexcept {
+    return mesh_length_unit.pow(2);
+  }
+
  private:
+  [[nodiscard]] constexpr bool numericSemanticsValid() const noexcept {
+    return (mesh_dimension == 2 && planar_depth > 0.0) || mesh_dimension == 3;
+  }
+
   [[nodiscard]] double effectiveMeasure(double mesh_measure) const noexcept {
-    if (!valid() || !std::isfinite(mesh_measure) || mesh_measure <= 0.0) {
+    // Deliberately numeric-only: this method is called once per cell/face.
+    // Runtime-unit validation and algebra stay outside the mesh scan.
+    if (!numericSemanticsValid() || !std::isfinite(mesh_measure) ||
+        mesh_measure <= 0.0) {
       return std::numeric_limits<double>::quiet_NaN();
     }
     return mesh_dimension == 2 ? mesh_measure * planar_depth : mesh_measure;
   }
 };
 
-struct StatisticsOptions {
-  bool enabled{false};
-  std::size_t sample_every_steps{1};
-  double planar_depth{1.0};
+class StatisticsOptions {
+ public:
+  constexpr StatisticsOptions() = default;
+
+  template <mp_units::Quantity Depth, mp_units::Reference MeshLengthReference>
+  constexpr StatisticsOptions(bool enabled, std::size_t sample_every_steps,
+                              Depth planar_depth,
+                              MeshLengthReference mesh_length_reference)
+      : enabled_(enabled),
+        sample_every_steps_(sample_every_steps),
+        planar_depth_(static_cast<double>(planar_depth.numerical_value_in(
+            mp_units::get_unit(mesh_length_reference)))),
+        mesh_length_unit_(pemu::unit::bridgeUnit(mesh_length_reference)) {
+    static_assert(pemu::unit::bridgeReference(MeshLengthReference{}).kind() ==
+                  pemu::unit::QuantityKind::length);
+  }
 
   [[nodiscard]] constexpr bool valid() const noexcept {
-    return sample_every_steps > 0 && planar_depth > 0.0;
+    return !enabled_ || (sample_every_steps_ > 0 && planar_depth_ > 0.0 &&
+                         mesh_length_unit_.is_convertible(units::precise::m));
   }
 
   [[nodiscard]] constexpr bool shouldSample(std::size_t step) const noexcept {
-    return enabled && valid() && step % sample_every_steps == 0;
+    return enabled_ && valid() && step % sample_every_steps_ == 0;
   }
+
+  [[nodiscard]] constexpr bool enabled() const noexcept { return enabled_; }
+
+  [[nodiscard]] constexpr std::size_t sampleEverySteps() const noexcept {
+    return sample_every_steps_;
+  }
+
+  [[nodiscard]] constexpr double planarDepth() const noexcept {
+    return planar_depth_;
+  }
+
+  [[nodiscard]] constexpr units::precise_unit meshLengthUnit() const noexcept {
+    return mesh_length_unit_;
+  }
+
+ private:
+  bool enabled_{false};
+  std::size_t sample_every_steps_{1};
+  double planar_depth_{1.0};
+  units::precise_unit mesh_length_unit_{units::precise::one};
 };
 
 struct ScalarFieldStatistics {
@@ -72,14 +125,20 @@ struct ScalarFieldStatistics {
   double weighted_mean{};
   double weighted_rms{};
 
+  units::precise_unit value_unit{units::precise::one};
+  units::precise_unit weight_unit{units::precise::one};
+
+  [[nodiscard]] constexpr units::precise_unit integralUnit() const noexcept {
+    return value_unit * weight_unit;
+  }
+
   [[nodiscard]] bool valid() const noexcept {
-    return sample_count != 0 && finite_count != 0 &&
-           non_finite_count == 0 && invalid_weight_count == 0 &&
-           weight_sum > 0.0 && std::isfinite(minimum) &&
-           std::isfinite(maximum) && std::isfinite(max_abs) &&
-           std::isfinite(weight_sum) && std::isfinite(integral) &&
-           std::isfinite(l1_integral) && std::isfinite(weighted_mean) &&
-           std::isfinite(weighted_rms);
+    return sample_count != 0 && finite_count != 0 && non_finite_count == 0 &&
+           invalid_weight_count == 0 && weight_sum > 0.0 &&
+           std::isfinite(minimum) && std::isfinite(maximum) &&
+           std::isfinite(max_abs) && std::isfinite(weight_sum) &&
+           std::isfinite(integral) && std::isfinite(l1_integral) &&
+           std::isfinite(weighted_mean) && std::isfinite(weighted_rms);
   }
 };
 
@@ -119,8 +178,12 @@ class ScalarFieldStatisticsAccumulator {
     square_integral_.add(value * value * physical_weight);
   }
 
-  [[nodiscard]] ScalarFieldStatistics finish() const noexcept {
+  [[nodiscard]] ScalarFieldStatistics finish(
+      units::precise_unit value_unit = units::precise::one,
+      units::precise_unit weight_unit = units::precise::one) const noexcept {
     auto result = statistics_;
+    result.value_unit = value_unit;
+    result.weight_unit = weight_unit;
     result.weight_sum = weight_sum_.value();
     result.integral = integral_.value();
     result.l1_integral = l1_integral_.value();

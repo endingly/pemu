@@ -153,10 +153,7 @@ pemu::simulation::AdaptiveStepPlasmaSimulation simulation(
     density, reactions, transport, evaluator,
     pemu::simulation::AdaptiveTimeClock(end_time), trace,
     pemu::trace::StatisticsOptions{
-        .enabled = true,
-        .sample_every_steps = 10,
-        .planar_depth = 1.0,
-    });
+        true, 10, 1.0 * cm, isq::length[cm]});
 
 simulation.run();
 ```
@@ -205,9 +202,10 @@ $$
 V_c=A_cL_z,\qquad A_f=\ell_fL_z.
 $$
 
-`StatisticsOptions::planar_depth` 就是 $L_z$，其单位必须与网格坐标单位一致；厘米网格传
-入 `1.0` 表示 $1\,\mathrm{cm}$ 厚度。三维网格直接使用原生单元体积与面面积，并忽略
-该参数。事件中的 `volume_semantics=planar_extrusion` 或 `native_3d` 明示所用约定。
+`StatisticsOptions` 的第三项是带 mp-units 单位的 $L_z$，第四项是网格坐标 reference；厘米
+网格传入 `1.0 * cm, isq::length[cm]`。构造后只保存换算过的面外厚度裸值与桥接得到的
+`precise_unit`。三维网格直接使用原生单元体积与面面积，并忽略厚度数值。事件中的
+`volume_semantics=planar_extrusion` 或 `native_3d` 明示所用约定。
 
 ### 6.2 通用标量统计
 
@@ -223,6 +221,16 @@ $$
 以及最小值、最大值、最大绝对值、$L^1$ 积分、负值数、非有限值数和非法权重数。
 species 的 `total_number` 是数密度的体积积分；charge 的 `net_charge` 是空间电荷密度
 的体积积分，`relative_imbalance=|Q|/\int|\rho|\,dV`。
+
+统计量同时携带运行期单位。若字段单位为 $[u]$，几何权重单位为 $[w]$，则 min、max、
+mean 与 RMS 使用 $[u]$，权重和使用 $[w]$，integral 与 $L^1$ integral 使用
+$[u][w]$。单位只在统计器收尾和 trace 事件组装阶段附加并相乘；遍历 cell/face 的热循环
+仍只接收 `double value, double weight`。启用统计时，simulation 构造函数还会验证数密度、
+电荷密度、电势和法向电场都具有期望的 `QuantityKind`，缺失或错误 metadata 会立即拒绝。
+
+`TraceAttribute` 可附带 `precise_unit`，ostream 输出形如
+`minimum=3.125 [V]`、`net_charge=0 [C]`。LLNL Units 可以把等价单位规范化显示，例如
+`cm^3` 显示成 `mL`；无量纲量统一显示为 `[1]`。
 
 正常统计作为 `Debug/Trace` 事件输出。物种密度出现负值时升级为 `Warning/Diagnostic`；
 任意场出现 NaN、无穷值、非法物理权重或无有效统计量时升级为 `Error/Diagnostic`。

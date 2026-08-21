@@ -1,42 +1,88 @@
 #pragma once
 
-#include <string>
-#include <type_traits>
-#include <typeindex>
-#include <utility>
+#include <llnl-units/units.hpp>
+
+#include <cstdint>
+#include <string_view>
 
 namespace pemu::unit {
 
-// Runtime, type-erased metadata for an mp-units quantity specification and
-// unit. The mp-units types never become part of a field's scalar type.
+enum class QuantityKind : std::uint8_t {
+  dimensionless,
+  length,
+  inverse_length,
+  frequency,
+  speed,
+  particle_number_density,
+  particle_number_density_rate,
+  reaction_rate_density,
+  electric_charge_density,
+  electric_potential,
+  electric_potential_difference,
+  normal_electric_field_strength,
+  normal_drift_velocity,
+};
+
+// Runtime metadata produced once from an mp-units reference at a Field
+// construction boundary. No mp-units type and no presentation string is kept.
 class PhysicalQuantityMetadata {
  public:
-  PhysicalQuantityMetadata(std::string unit_symbol,
-                           std::type_index quantity_spec_type,
-                           std::type_index unit_type)
-      : unit_symbol_(std::move(unit_symbol)),
-        quantity_spec_type_(quantity_spec_type),
-        unit_type_(unit_type) {}
+  constexpr PhysicalQuantityMetadata(QuantityKind kind,
+                                     units::precise_unit unit) noexcept
+      : kind_(kind), unit_(unit) {}
 
-  [[nodiscard]]
-  const std::string& unitSymbol() const noexcept {
-    return unit_symbol_;
+  [[nodiscard]] constexpr QuantityKind kind() const noexcept { return kind_; }
+
+  [[nodiscard]] constexpr units::precise_unit unit() const noexcept {
+    return unit_;
   }
 
-  template <typename QS, typename U>
-  [[nodiscard]] bool represents(QS, U) const noexcept {
-    return quantity_spec_type_ ==
-               std::type_index(typeid(std::remove_cvref_t<QS>)) &&
-           unit_type_ == std::type_index(typeid(std::remove_cvref_t<U>));
+  friend bool operator==(const PhysicalQuantityMetadata& lhs,
+                         const PhysicalQuantityMetadata& rhs) {
+    return lhs.kind_ == rhs.kind_ && lhs.unit_ == rhs.unit_;
   }
-
-  friend bool operator==(const PhysicalQuantityMetadata&,
-                         const PhysicalQuantityMetadata&) = default;
 
  private:
-  std::string unit_symbol_;
-  std::type_index quantity_spec_type_;
-  std::type_index unit_type_;
+  QuantityKind kind_;
+  units::precise_unit unit_;
 };
 
 }  // namespace pemu::unit
+
+namespace pemu {
+
+[[nodiscard]] constexpr std::string_view to_string(
+    unit::QuantityKind kind) noexcept {
+  using enum unit::QuantityKind;
+  switch (kind) {
+    case dimensionless:
+      return "dimensionless";
+    case length:
+      return "length";
+    case inverse_length:
+      return "inverse_length";
+    case frequency:
+      return "frequency";
+    case speed:
+      return "speed";
+    case particle_number_density:
+      return "particle_number_density";
+    case particle_number_density_rate:
+      return "particle_number_density_rate";
+    case reaction_rate_density:
+      return "reaction_rate_density";
+    case electric_charge_density:
+      return "electric_charge_density";
+    case electric_potential:
+      return "electric_potential";
+    case electric_potential_difference:
+      return "electric_potential_difference";
+    case normal_electric_field_strength:
+      return "normal_electric_field_strength";
+    case normal_drift_velocity:
+      return "normal_drift_velocity";
+  }
+  return "unknown";
+}
+
+}  // namespace pemu

@@ -47,15 +47,28 @@ void appendValue(Buffer& output, const TraceValue& value) {
 }
 
 template <typename Buffer>
+void appendUnit(Buffer& output, units::precise_unit unit) {
+  if (unit == units::precise::one) {
+    fmt::format_to(std::back_inserter(output), " [1]");
+  } else {
+    fmt::format_to(std::back_inserter(output), " [{}]", units::to_string(unit));
+  }
+}
+
+template <typename Buffer>
 void appendAttributeValue(Buffer& output, const TraceAttribute* attribute) {
   if (attribute != nullptr) {
     appendValue(output, attribute->value);
+    if (attribute->unit.has_value()) {
+      appendUnit(output, *attribute->unit);
+    }
   }
 }
 
 template <typename Buffer>
 void appendEventName(Buffer& output, const TraceEvent& event) {
-  fmt::format_to(std::back_inserter(output), "{}", pemu::to_string(event.domain));
+  fmt::format_to(std::back_inserter(output), "{}",
+                 pemu::to_string(event.domain));
   if (!event.category.empty()) {
     fmt::format_to(std::back_inserter(output), ".{}", event.category);
   }
@@ -79,6 +92,9 @@ void appendDetails(Buffer& output, const TraceEvent& event) {
     fmt::format_to(std::back_inserter(output), "{}{}=", has_detail ? "; " : "",
                    attribute.name);
     appendValue(output, attribute.value);
+    if (attribute.unit.has_value()) {
+      appendUnit(output, *attribute.unit);
+    }
     has_detail = true;
   }
 }
@@ -102,10 +118,11 @@ void OstreamTraceSink::operator()(const TraceEvent& event) noexcept {
           "{:>12} | {:>12} | {}\n",
           "LEVEL", "EVENT", "STEP", "TIME", "DT", "END TIME", "SOLVER",
           "RESIDUAL", "REL RESIDUAL", "DETAILS");
-      fmt::format_to(std::back_inserter(output),
-                     "{:-<8}-+-{:-<58}-+-{:-<4}-+-{:-<15}-+-{:-<15}-+-{:-<15}-+-"
-                     "{:-<24}-+-{:-<12}-+-{:-<12}-+-{}\n",
-                     "", "", "", "", "", "", "", "", "", "");
+      fmt::format_to(
+          std::back_inserter(output),
+          "{:-<8}-+-{:-<58}-+-{:-<4}-+-{:-<15}-+-{:-<15}-+-{:-<15}-+-"
+          "{:-<24}-+-{:-<12}-+-{:-<12}-+-{}\n",
+          "", "", "", "", "", "", "", "", "", "");
       header_written_ = true;
     }
 
@@ -129,14 +146,15 @@ void OstreamTraceSink::operator()(const TraceEvent& event) noexcept {
                          findAttribute(event, "relative_residual"));
     appendDetails(details, event);
 
-    fmt::format_to(std::back_inserter(output),
-                   "{:<8} | {:<58} | {:>4} | {:>15} | {:>15} | {:>15} | {:>24} | "
-                   "{:>12} | {:>12} | {}\n",
-                   pemu::to_string(event.severity), asStringView(event_name),
-                   asStringView(step), asStringView(time), asStringView(dt),
-                   asStringView(end_time), asStringView(solver_status),
-                   asStringView(residual_norm), asStringView(relative_residual),
-                   asStringView(details));
+    fmt::format_to(
+        std::back_inserter(output),
+        "{:<8} | {:<58} | {:>4} | {:>15} | {:>15} | {:>15} | {:>24} | "
+        "{:>12} | {:>12} | {}\n",
+        pemu::to_string(event.severity), asStringView(event_name),
+        asStringView(step), asStringView(time), asStringView(dt),
+        asStringView(end_time), asStringView(solver_status),
+        asStringView(residual_norm), asStringView(relative_residual),
+        asStringView(details));
     stream_->write(output.data(), static_cast<std::streamsize>(output.size()));
     if (stream_->good() && shouldFlushAfter(event)) {
       stream_->flush();

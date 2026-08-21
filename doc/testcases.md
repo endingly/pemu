@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 192 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 198 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -12,12 +12,21 @@
 | `PhysicalVolumeSemanticsTest.Extrudes2DMeasuresAndKeeps3DMeasures` | 二维网格的单元面积/面长度乘以面外厚度得到物理体积/面积，而三维网格保持原生几何测度。 |
 | `StatisticsOptionsTest.SamplesOnlyAtConfiguredStepInterval` | 统计探针只在启用且步号满足采样间隔时运行，并拒绝零间隔等非法配置。 |
 | `ScalarFieldStatisticsTest.ComputesWeightedExtremaIntegralMeanAndRms` | 标量统计器在非均匀物理权重下正确计算极值、最大绝对值、积分、L1 积分、加权均值和 RMS。 |
+| `ScalarFieldStatisticsTest.DerivesIntegralUnitOutsideSampleLoop` | 统计器只在收尾边界附加并组合运行期单位，验证 $\mathrm{C/cm^3}\times\mathrm{cm^3}=\mathrm C$，而逐样本 `add` 仍只接收两个 `double`。 |
 | `ScalarFieldStatisticsTest.ReportsNonFiniteValuesAndInvalidWeights` | 标量统计器显式计数负值、非有限值和非法物理权重，不把异常样本静默混入积分。 |
 | `TraceSinkTest.OstreamSinkFormatsTabularStructuredEvents` | ostream sink 将严重级别、类别、事件名和常用数值属性对齐为带表头的列；其余属性留在详情列，并报告流状态。 |
+| `TraceSinkTest.OstreamSinkFormatsAttributeUnits` | 带 `precise_unit` 的 trace 属性按 `value [unit]` 输出，证明结构化事件中的单位同步到最终文本，而非由日志字段名猜测。 |
 | `TraceSinkTest.OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd` | ostream sink 在每两个 simulation 完成步后刷新文件流，并在正常或失败结束时刷新不足两个时间步的尾部记录。 |
 | `EnumStringTest.DomainsAndSeveritiesHaveStableNames` | `DiagDomain` 与 `Severity` 均通过 `pemu::to_string` 映射为稳定、可读的字符串，可供过滤和机器处理使用。 |
 | `TraceSinkTest.NullSinkAcceptsStructuredDiagnostics` | 同一个默认空 trace sink 能无副作用地接受标记为 diagnostic 的结构化事件。 |
 | `TraceSinkTest.OstreamSinkFormatsDiagnosticEvent` | 同一个 ostream trace sink 按严重级别、模块域、类别、名称、消息和属性格式化诊断事件。 |
+
+## 单位（`submod/unit/test/test_unit.cpp`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `PlasmaQuantitiesTest.DefineDimensionallyConsistentReferences` | 项目定义的数密度、数密度变化率、反应率密度、法向电场和法向漂移速度 quantity specification 只接受量纲相容的 mp-units unit。 |
+| `MpUnitsBridgeTest.ProducesRuntimeMetadataWithoutStringParsing` | mp-units reference 在编译期直接桥接为可平凡复制的 `QuantityKind + precise_unit`；数密度、电荷密度、电势和法向电场的运行期单位正确，且不依赖字符串解析。 |
 
 ## 边界条件（`submod/boundary/test/test_boundary.cpp`）
 
@@ -73,7 +82,8 @@
 | `FaceFieldAtRejectsInvalidFace` | 检查式面访问会拒绝越界。 |
 | `FaceFieldKeepsMeshAssociation` | 面场保留原网格身份。 |
 | `FieldTest.FieldSetGroupsTypedFieldsAndPropagatesMetadata` | `FieldSet` 能按强类型稠密 ID 聚合相互独立的单元场与面场，并统一保留网格、初值、元数据、遍历和批量填充语义。 |
-| `FieldTest.PhysicalQuantityIsMetadataAndRawStorageRemainsDouble` | mp-units quantity specification 与 unit 作为每场一份的类型擦除元数据存在；不相容的 specification/unit 不能组成 reference，单位符号自动生成，而场元素、`data()` 和核心存储仍为 `double`。 |
+| `FieldTest.PhysicalQuantityIsMetadataAndRawStorageRemainsDouble` | metadata 只保存由 mp-units bridge 产生的 `QuantityKind + precise_unit`，该表示可平凡复制，而场元素、`data()` 和核心存储仍为 `double`。 |
+| `FieldTest.MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata` | 编译期 bridge 不经字符串解析即可把数密度、电荷密度和法向电场 reference 映射为正确的语义枚举与 LLNL `precise_unit`。 |
 | `FieldTest.QuantityBoundaryConvertsToFieldStorageUnit` | `fillQuantity`/`setQuantity` 可将米输入换算为按厘米存储的裸值，`quantityAt` 能重新包装和换算输出。 |
 | `FieldTest.QuantityBoundaryRejectsReferenceDifferentFromMetadata` | 边界适配器会拒绝单位不同的 reference，也会拒绝同为伏特但 quantity specification 不同的 reference。 |
 
@@ -255,6 +265,7 @@
 | `FixedStepPlasmaSimulationTest.SolvesPoissonExactlyOncePerTimeStepAndReusesFactorization` | 每步只解一次泊松方程，且固定矩阵复用分析和分解。 |
 | `FixedStepPlasmaSimulationTest.RejectsClockTimeStepDifferentFromTransportTimeStep` | 仿真时钟与输运推进器的 $\Delta t$ 必须一致。 |
 | `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
+| `FixedStepPlasmaSimulationTest.StatisticsRejectFieldsWithoutPhysicalMetadata` | 启用物理统计时，simulation 必须在运行前拒绝缺少预期 `QuantityKind + precise_unit` metadata 的场，避免生成无单位或错单位统计。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
 | `AdaptiveStepPlasmaSimulationTest.EmitsOrderedTraceEventsWithTimeStepDiagnostics` | 自适应仿真逐阶段发出 trace，且 `timestep.selected` 和 `step.completed` 分别准确报告实际步长与提交后的时间。 |
@@ -266,5 +277,5 @@
 | `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
-| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的单位元数据传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，确认 species、charge、potential 和 electric-field 事件均写入当前工作目录的 `test.log`。 |
+| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的运行期 metadata 传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，确认 species、charge、potential 和 electric-field 事件及其体积、粒子数、净电荷、电势、电场面积等单位均写入当前工作目录的 `test.log`。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep` | 使用与上述 \(0/400\,\mathrm{V}\) 厘米网格、电离反应和初始物种完全相同的配置；先以真实 CHOLMOD 完成一个物理时间步，再注入一次底层求解失败，验证 `linalg` 域 diagnostic、可读的 `SolveFailed` 状态与根因消息先于 simulation 失败事件输出。结构化失败 trace 写入当前工作目录的 `test.diag.log`。 |
