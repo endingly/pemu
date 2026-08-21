@@ -139,6 +139,7 @@ MoabMesh::MoabMesh(const std::string& filename)
   buildHandleMaps();
 
   buildTopology();
+  buildVertexTopology();
   buildGeometry();
 
   buildBoundaryMetadata();
@@ -272,10 +273,12 @@ void MoabMesh::buildEntities() {
 void MoabMesh::buildHandleMaps() {
   cell_id_.clear();
   face_id_.clear();
+  vertex_id_.clear();
 
   cell_id_.reserve(cell_handles_.size());
 
   face_id_.reserve(face_handles_.size());
+  vertex_id_.reserve(vertex_handles_.size());
 
   for (std::size_t i = 0; i < cell_handles_.size(); ++i) {
 
@@ -293,6 +296,14 @@ void MoabMesh::buildHandleMaps() {
     }
 
     face_id_.emplace(face_handles_[i], static_cast<FaceId>(i));
+  }
+
+  for (std::size_t i = 0; i < vertex_handles_.size(); ++i) {
+    if (i > std::numeric_limits<VertexId>::max()) {
+      throw std::overflow_error("number of vertices exceeds VertexId range");
+    }
+
+    vertex_id_.emplace(vertex_handles_[i], static_cast<VertexId>(i));
   }
 }
 
@@ -468,6 +479,56 @@ static std::vector<Vec3> getEntityVertices(const moab::Core& core,
   }
 
   return result;
+}
+
+// ============================================================
+// Ordered cell -> vertex connectivity and dense vertex geometry
+// ============================================================
+
+void MoabMesh::buildVertexTopology() {
+  const std::size_t num_cells = cell_handles_.size();
+
+  cell_vertex_offsets_.resize(num_cells + 1);
+  cell_vertices_.clear();
+
+  for (std::size_t c = 0; c < num_cells; ++c) {
+    cell_vertex_offsets_[c] = checkedUint32(cell_vertices_.size());
+
+    const moab::EntityHandle* connectivity = nullptr;
+    int num_vertices = 0;
+    const auto error = core_->get_connectivity(
+        cell_handles_[c], connectivity, num_vertices, true);
+
+    checkMoab(error, "MOAB failed to query cell vertex connectivity");
+
+    if (connectivity == nullptr || num_vertices < 3) {
+      throw std::runtime_error("cell has invalid vertex connectivity");
+    }
+
+    for (int i = 0; i < num_vertices; ++i) {
+      const auto vertex_it = vertex_id_.find(connectivity[i]);
+      if (vertex_it == vertex_id_.end()) {
+        throw std::runtime_error("cell vertex missing from dense map");
+      }
+
+      cell_vertices_.push_back(vertex_it->second);
+    }
+  }
+
+  cell_vertex_offsets_[num_cells] = checkedUint32(cell_vertices_.size());
+
+  vertex_coordinates_.resize(vertex_handles_.size());
+  if (!vertex_handles_.empty()) {
+    std::vector<double> coordinates(3 * vertex_handles_.size());
+    checkMoab(core_->get_coords(vertex_handles_.data(), vertex_handles_.size(),
+                                coordinates.data()),
+              "MOAB failed to query dense vertex coordinates");
+
+    for (std::size_t i = 0; i < vertex_handles_.size(); ++i) {
+      vertex_coordinates_[i] = {coordinates[3 * i], coordinates[3 * i + 1],
+                                coordinates[3 * i + 2]};
+    }
+  }
 }
 
 // ============================================================
@@ -854,6 +915,18 @@ std::span<const FaceId> MoabMesh::cellFaces(const CellId cell) const {
                                  static_cast<std::size_t>(end - begin)};
 }
 
+std::span<const VertexId> MoabMesh::cellVertices(const CellId cell) const {
+  if (cell >= cell_handles_.size()) {
+    throw std::out_of_range("CellId out of range");
+  }
+
+  const std::uint32_t begin = cell_vertex_offsets_[cell];
+  const std::uint32_t end = cell_vertex_offsets_[cell + 1];
+
+  return std::span<const VertexId>{cell_vertices_.data() + begin,
+                                   static_cast<std::size_t>(end - begin)};
+}
+
 // ============================================================
 // Geometry query
 // ============================================================
@@ -864,6 +937,14 @@ Vec3 MoabMesh::cellCenter(const CellId cell) const {
   }
 
   return cell_centers_[cell];
+}
+
+Vec3 MoabMesh::vertex(const VertexId vertex) const {
+  if (vertex >= vertex_coordinates_.size()) {
+    throw std::out_of_range("VertexId out of range");
+  }
+
+  return vertex_coordinates_[vertex];
 }
 
 double MoabMesh::cellVolume(const CellId cell) const {

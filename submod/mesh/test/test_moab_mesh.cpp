@@ -139,6 +139,40 @@ TEST_F(MoabMeshTest, EachCellHasFourFaces) {
   EXPECT_EQ(mesh_.cellFaces(1).size(), 4u);
 }
 
+TEST_F(MoabMeshTest, ExposesOrderedCellVertexConnectivity) {
+  for (CellId c = 0; c < mesh_.numCells(); ++c) {
+    const auto vertices = mesh_.cellVertices(c);
+    ASSERT_EQ(vertices.size(), 4u);
+
+    for (const VertexId vertex : vertices) {
+      EXPECT_LT(vertex, mesh_.numVertices());
+    }
+  }
+}
+
+TEST_F(MoabMeshTest, ExposesDenseVertexCoordinates) {
+  double xmin = std::numeric_limits<double>::max();
+  double xmax = std::numeric_limits<double>::lowest();
+  double ymin = std::numeric_limits<double>::max();
+  double ymax = std::numeric_limits<double>::lowest();
+
+  for (VertexId vertex = 0; vertex < mesh_.numVertices(); ++vertex) {
+    const auto point = mesh_.vertex(vertex);
+    xmin = std::min(xmin, point.x);
+    xmax = std::max(xmax, point.x);
+    ymin = std::min(ymin, point.y);
+    ymax = std::max(ymax, point.y);
+    EXPECT_NEAR(point.z, 0.0, kTolerance);
+  }
+
+  EXPECT_NEAR(xmin, 0.0, kTolerance);
+  EXPECT_NEAR(xmax, 2.0, kTolerance);
+  EXPECT_NEAR(ymin, 0.0, kTolerance);
+  EXPECT_NEAR(ymax, 1.0, kTolerance);
+  EXPECT_THROW(mesh_.vertex(static_cast<VertexId>(mesh_.numVertices())),
+               std::out_of_range);
+}
+
 // ============================================================
 // Verify:
 //
@@ -442,6 +476,8 @@ TEST_F(MoabMeshTest, RejectsInvalidCellId) {
   const CellId invalid = static_cast<CellId>(mesh_.numCells());
 
   EXPECT_THROW(mesh_.cellFaces(invalid), std::out_of_range);
+
+  EXPECT_THROW(mesh_.cellVertices(invalid), std::out_of_range);
 
   EXPECT_THROW(mesh_.cellCenter(invalid), std::out_of_range);
 

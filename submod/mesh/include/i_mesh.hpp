@@ -43,12 +43,18 @@ class IMesh {
   [[nodiscard]]
   virtual std::span<const FaceId> cellFaces(CellId cell) const = 0;
 
+  [[nodiscard]]
+  virtual std::span<const VertexId> cellVertices(CellId cell) const = 0;
+
   // --------------------------------------------------------
   // Geometry
   // --------------------------------------------------------
 
   [[nodiscard]]
   virtual Vec3 cellCenter(CellId cell) const = 0;
+
+  [[nodiscard]]
+  virtual Vec3 vertex(VertexId vertex) const = 0;
 
   [[nodiscard]]
   virtual double cellVolume(CellId cell) const = 0;

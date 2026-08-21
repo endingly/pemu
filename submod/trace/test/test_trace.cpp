@@ -390,6 +390,7 @@ TEST(EnumStringTest, DomainsAndSeveritiesHaveStableNames) {
       std::pair{DiagDomain::mesh, "mesh"},
       std::pair{DiagDomain::unit, "unit"},
       std::pair{DiagDomain::field, "field"},
+      std::pair{DiagDomain::output, "output"},
       std::pair{DiagDomain::trace, "trace"},
       std::pair{DiagDomain::boundary, "boundary"},
       std::pair{DiagDomain::discretization, "discretization"},
