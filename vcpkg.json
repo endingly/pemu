@@ -10,6 +10,10 @@
     "mp-units",
     "suitesparse-umfpack",
     "eigen3",
-    "moab"
+    "moab",
+    {
+      "name": "vtk",
+      "default-features": false
+    }
   ]
 }

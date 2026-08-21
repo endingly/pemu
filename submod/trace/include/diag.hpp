@@ -12,6 +12,7 @@ enum class DiagDomain : std::uint8_t {
   mesh,
   unit,
   field,
+  output,
   trace,
   boundary,
   discretization,
@@ -35,6 +36,8 @@ namespace pemu {
       return "unit";
     case trace::DiagDomain::field:
       return "field";
+    case trace::DiagDomain::output:
+      return "output";
     case trace::DiagDomain::trace:
       return "trace";
     case trace::DiagDomain::boundary:

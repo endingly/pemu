@@ -50,11 +50,15 @@ class MoabMesh final : public IMesh {
 
   std::span<const FaceId> cellFaces(CellId cell) const override;
 
+  std::span<const VertexId> cellVertices(CellId cell) const override;
+
   // --------------------------------------------------------
   // Geometry
   // --------------------------------------------------------
 
   Vec3 cellCenter(CellId cell) const override;
+
+  Vec3 vertex(VertexId vertex) const override;
 
   double cellVolume(CellId cell) const override;
 
@@ -78,6 +82,8 @@ class MoabMesh final : public IMesh {
   void buildHandleMaps();
 
   void buildTopology();
+
+  void buildVertexTopology();
 
   void buildGeometry();
 
@@ -109,6 +115,8 @@ class MoabMesh final : public IMesh {
 
   std::unordered_map<moab::EntityHandle, FaceId> face_id_;
 
+  std::unordered_map<moab::EntityHandle, VertexId> vertex_id_;
+
   // --------------------------------------------------------
   // Topology
   // --------------------------------------------------------
@@ -124,11 +132,17 @@ class MoabMesh final : public IMesh {
 
   std::vector<FaceId> cell_faces_;
 
+  std::vector<std::uint32_t> cell_vertex_offsets_;
+
+  std::vector<VertexId> cell_vertices_;
+
   // --------------------------------------------------------
   // Geometry
   // --------------------------------------------------------
 
   std::vector<Vec3> cell_centers_;
+
+  std::vector<Vec3> vertex_coordinates_;
 
   //
   // For 2D mesh this stores cell area.

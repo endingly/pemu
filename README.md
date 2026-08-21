@@ -9,14 +9,16 @@
 - 稳态泊松/扩散方程 $-∇·(ε∇φ)=ρ$
 - 标量对流通量的一阶迎风离散；
 - 瞬态扩散方程的后向欧拉时间推进；
-- Gmsh 网格的 MOAB 读取、边界物理组及几何/拓扑预处理。
+- Gmsh 网格的 MOAB 读取、边界物理组及几何/拓扑预处理；
+- 基于官方 `vtkHDFWriter` 的独立 VTKHDF 场输出与 ParaView 可读性验证。
 
 ## 阅读顺序
 
 1. [数学模型与离散化](doc/mathematics-and-discretization.md)：方程、符号、面通量和离散精度；
 2. [网格、边界与程序组织](doc/mesh-boundary-and-architecture.md)：数据约定及模块边界；
 3. [诊断、日志与中间状态追踪](doc/diagnostics-and-tracing.md)：结构化事件、sink 与仿真耦合；
-4. [测试用例契约](doc/testcases.md)：全部 171 个测试各自保证的性质。
+4. [VTKHDF 场输出](doc/output.md)：网格/场映射、face 数据关联与 checkpoint 边界；
+5. [测试用例契约](doc/testcases.md)：全部 206 个测试各自保证的性质。
 
 ## 当前适用范围
 

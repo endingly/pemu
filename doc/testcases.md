@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 200 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 206 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -50,6 +50,8 @@
 | `HasExpectedEntityCounts` | 两四边形夹具有 2 单元、6 顶点、7 条唯一面。 |
 | `HasSixBoundaryFacesAndOneInternalFace` | 边界/内面分类及边界面无 neighbor 的拓扑语义正确。 |
 | `EachCellHasFourFaces` | 每个四边形连接四条面。 |
+| `ExposesOrderedCellVertexConnectivity` | `IMesh` 暴露构造非结构网格所需的有序 cell→vertex 稠密连通关系。 |
+| `ExposesDenseVertexCoordinates` | 每个稠密 `VertexId` 都能返回原始顶点坐标，且两单元夹具的包围盒正确。 |
 | `CellFaceConnectivityIsConsistent` | 每条面同时出现在其 owner（及内面的 neighbor）邻接表中。 |
 | `CellsShareExactlyOneFace` | 两控制体只有一个公共内面。 |
 | `ComputesCorrectCellCenters` | 两个中心为 `(0.5,0.5)`、`(1.5,0.5)`，且不假设 ID 顺序。 |
@@ -88,6 +90,15 @@
 | `FieldTest.MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata` | 编译期 bridge 不经字符串解析即可把数密度、电荷密度和法向电场 reference 映射为正确的语义枚举与 LLNL `precise_unit`。 |
 | `FieldTest.QuantityBoundaryConvertsToFieldStorageUnit` | `fillQuantity`/`setQuantity` 可将米输入换算为按厘米存储的裸值，`quantityAt` 能重新包装和换算输出。 |
 | `FieldTest.QuantityBoundaryRejectsReferenceDifferentFromMetadata` | 边界适配器会拒绝单位不同的 reference，也会拒绝同为伏特但 quantity specification 不同的 reference。 |
+
+## VTKHDF 场输出（`submod/output/test/test_vtkhdf_writer.cpp`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `MeshAdapterTest.ConvertsIMeshToPolygonalUnstructuredGrid` | `IMesh` 的顶点、cell→vertex 连通关系被无损映射为 `vtkUnstructuredGrid` polygon cells。 |
+| `ParaViewReadabilityTest.OfficialVtkHdfReaderRoundTripsFieldsMetadataAndTime` | 官方 `vtkHDFWriter` 产物能由 ParaView 使用的官方 `vtkHDFReader` 读回；CellData、原始 face FieldData/拓扑、面积加权 cell-centered 可视化副本、field name、运行期 quantity/unit 以及 step/time 均保持一致。 |
+| `OutputTraceTest.EmitsOnlyLightweightCompletionContextAfterWrite` | 成功输出后只向 trace 发出 `output.completed` 及 `path/step/time` 三个轻量属性，不把场数组塞入 trace。 |
+| `VtkHdfWriterTest.RefusesOverwriteUnlessExplicitlyEnabled` | writer 默认拒绝覆盖已有文件，只有请求显式设置 `overwrite` 时才覆盖。 |
 
 ## 离散算子（`submod/discretization/test/test_operator.cpp`）
 
