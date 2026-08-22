@@ -123,6 +123,9 @@ manifest 和语义互不替代：普通 dump 文件没有 checkpoint marker，re
 - 可选 scalar workflow 状态（例如自适应推进的 `previous_dt`）；
 - association、稳定 key、原字段 metadata name、quantity kind、unit 与值数量。
 
+覆盖已有 checkpoint 时，writer 先在目标目录写入并校验临时 VTKHDF，再以文件系统原子
+rename 提交；写入失败会清理临时文件并保留上一份有效 checkpoint。
+
 VTKHDF 会改写数组名中的 `.` 和 `/`，所以 checkpoint key 明确禁止这两个字符，避免恢复
 时出现名称歧义。`VtkHdfReader::inspect` 可只读取并验证 manifest；`restore` 在写入任何
 目标字段之前统一校验格式版本、完整 mesh/FaceId 顺序、key、尺寸和物理 metadata。默认
@@ -150,8 +153,9 @@ reader.restore("state.vtkhdf", {
 ```
 
 checkpoint 保存由调用方明确选择的数值状态；外部配置、reaction network、边界条件和求解器
-实例仍由应用构造。底层 reader/writer 仍可独立使用；通常由 simulation workflow 自动选择
-物种密度、恢复 clock，并为自适应推进保存/恢复步长历史。
+实例仍由应用构造。底层 reader/writer 仍可独立使用；simulation workflow 会额外写入 workflow
+schema，并将 species ID 与名称编码进密度 key，从而拒绝物种缺失或顺序不一致的恢复；它还会
+恢复 clock，并为自适应推进保存/恢复步长历史。
 
 ## 可读性验证
 

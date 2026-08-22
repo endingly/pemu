@@ -30,6 +30,10 @@ inline void validateCheckpointOptions(const CheckpointOptions& options) {
     throw std::invalid_argument(
         "checkpoint must select periodic or final states");
   }
+  if (options.every_steps != 0 && !options.overwrite) {
+    throw std::invalid_argument(
+        "periodic checkpoint output requires atomic overwrite");
+  }
 }
 
 [[nodiscard]] inline bool shouldWriteCheckpoint(

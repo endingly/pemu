@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -71,6 +73,36 @@ constexpr std::array<std::string_view, 17> kReservedNames{
 struct LoadedCheckpoint {
   vtkSmartPointer<vtkUnstructuredGrid> grid;
   Manifest manifest;
+};
+
+std::atomic_uint64_t temporary_file_sequence{};
+
+[[nodiscard]] std::filesystem::path temporaryCheckpointPath(
+    const std::filesystem::path& path) {
+  const auto nonce =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto sequence =
+      temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
+  return path.parent_path() /
+         (path.stem().string() + ".tmp-" + std::to_string(nonce) + "-" +
+          std::to_string(sequence) + path.extension().string());
+}
+
+class TemporaryCheckpointFile {
+ public:
+  explicit TemporaryCheckpointFile(std::filesystem::path path)
+      : path_(std::move(path)) {}
+
+  ~TemporaryCheckpointFile() {
+    std::error_code error;
+    std::filesystem::remove(path_, error);
+  }
+
+  TemporaryCheckpointFile(const TemporaryCheckpointFile&) = delete;
+  TemporaryCheckpointFile& operator=(const TemporaryCheckpointFile&) = delete;
+
+ private:
+  std::filesystem::path path_;
 };
 
 [[nodiscard]] std::filesystem::path normalizedPath(
@@ -370,6 +402,9 @@ template <typename Value>
       readNumericScalar<std::uint64_t>(field_data, kStepArray);
   loaded.manifest.stamp.time =
       readNumericScalar<double>(field_data, kTimeArray);
+  if (!std::isfinite(loaded.manifest.stamp.time)) {
+    throw std::runtime_error("checkpoint time is not finite");
+  }
   loaded.manifest.num_cells =
       static_cast<std::size_t>(loaded.grid->GetNumberOfCells());
   loaded.manifest.num_faces = static_cast<std::size_t>(
@@ -453,6 +488,10 @@ template <typename Value>
         values->GetNumberOfValues() !=
             static_cast<vtkIdType>(descriptor.value_count)) {
       throw std::runtime_error("checkpoint field data does not match manifest");
+    }
+    if (descriptor.association == FieldAssociation::scalar &&
+        !std::isfinite(values->GetTuple1(0))) {
+      throw std::runtime_error("checkpoint scalar is not finite");
     }
     const std::size_t expected =
         descriptor.association == FieldAssociation::cell
@@ -691,15 +730,25 @@ OutputRecord VtkHdfWriter::write(const WriteRequest& request) const {
   }
   addManifest(*grid, request);
 
+  const auto temporary_path = temporaryCheckpointPath(path);
+  TemporaryCheckpointFile temporary_file{temporary_path};
   vtkNew<vtkHDFWriter> writer;
-  writer->SetFileName(path.string().c_str());
-  writer->SetOverwrite(request.overwrite);
+  writer->SetFileName(temporary_path.string().c_str());
+  writer->SetOverwrite(false);
   writer->SetWriteAllTimeSteps(false);
   writer->SetInputData(grid);
   const auto success = writer->Write();
   if (success == 0 || writer->GetErrorCode() != vtkErrorCode::NoError ||
-      !std::filesystem::is_regular_file(path)) {
+      !std::filesystem::is_regular_file(temporary_path)) {
     throw std::runtime_error("vtkHDFWriter failed to create checkpoint");
+  }
+  if (request.overwrite) {
+    std::filesystem::rename(temporary_path, path);
+  } else {
+    std::filesystem::create_hard_link(temporary_path, path);
+  }
+  if (!std::filesystem::is_regular_file(path)) {
+    throw std::runtime_error("failed to commit checkpoint atomically");
   }
   return {.path = path, .stamp = request.stamp};
 }

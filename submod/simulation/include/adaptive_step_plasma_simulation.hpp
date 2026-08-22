@@ -7,8 +7,9 @@
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/checkpoint.hpp>
 #include <pemu/simulation/field_output.hpp>
-#include <pemu/simulation/plasma_workflow_types.hpp>
+#include <pemu/simulation/plasma_reaction_rate_evaluator.hpp>
 #include <pemu/simulation/simulation_state.hpp>
+#include <pemu/trace/any_trace_sink.hpp>
 #include <pemu/trace/statistics.hpp>
 
 #include <cstddef>
@@ -28,7 +29,7 @@ class AdaptiveStepPlasmaSimulation {
                                Stepper& transport_stepper,
                                PlasmaReactionRateEvaluator rate_evaluator,
                                AdaptiveTimeClock clock,
-                               PlasmaTraceSink trace_sink = {},
+                               trace::AnyTraceSink trace_sink = {},
                                trace::StatisticsOptions statistics_options = {},
                                FieldOutputOptions field_output_options = {},
                                CheckpointOptions checkpoint_options = {});

@@ -2,8 +2,9 @@
 
 `pemu/simulation/workflow.hpp` 聚合固定步、自适应步、状态、dump 与 checkpoint 配置。
 `FixedStepPlasmaSimulation` 与 `AdaptiveStepPlasmaSimulation` 是非模板的轻量 façade：公开头文件只保留
-workflow API，反应率计算和 trace 回调分别以 `PlasmaReactionRateEvaluator`、`PlasmaTraceSink` 注入；
-具体的工作流实现位于 simulation 库的 `.cpp` 文件。
+workflow API，反应率计算和 trace 回调分别以 `PlasmaReactionRateEvaluator`、`trace::AnyTraceSink`
+注入；两个类分别实现在对应的 `.cpp` 中，状态转换、dump 生命周期和 checkpoint 调度由私有公共
+workflow 组件统一实现。
 simulation 是同步的轻量状态机，不创建后台线程，也不依赖第三方状态机库：
 
 | 状态 | 含义 | 可用转换 |
@@ -35,7 +36,8 @@ simulation.run();
 ## Checkpoint workflow
 
 `CheckpointOptions` 将 checkpoint 调度纳入 simulation。每次成功提交物理状态后，
-simulation 根据 `every_steps` 和 `write_final` 保存同一个可覆盖的 VTKHDF checkpoint；
+simulation 根据 `every_steps` 和 `write_final` 保存同一个可覆盖的 VTKHDF checkpoint；覆盖通过
+同目录临时文件原子提交，写入失败不会破坏上一份成功状态。
 checkpoint 写入失败会使 workflow 进入 `failed`。固定步和自适应步都自动生成稳定的物种
 密度 key。自适应步还保存 `previous_dt`，使恢复后的 growth limiter 与未中断运行一致。
 
@@ -61,6 +63,7 @@ simulation.restoreCheckpoint(checkpoint_reader, "checkpoint/plasma.vtkhdf");
 simulation.run();
 ```
 
-`restoreCheckpoint()` 只允许在 `ready` 状态调用。它恢复数值状态与时间积分历史，但网格、
-species、reaction network、边界条件及求解器配置仍由应用构造；这些外部配置必须与
+`restoreCheckpoint()` 只允许在 `ready` 状态调用。reader 只加载一次文件并先恢复到临时状态；
+workflow schema、species ID/name、mesh、metadata 和时间校验全部成功后，才提交 density、clock
+及时间积分历史。reaction network、边界条件及求解器配置仍由应用构造，这些外部配置必须与
 checkpoint 对应的算例一致。

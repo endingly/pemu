@@ -323,6 +323,7 @@ struct RecordingIonizationEvaluator {
 
 struct ElectricFieldAwareEvaluator {
   physics::ReactionId reaction;
+  double* observed_maximum{};
 
   void operator()(const physics::SpeciesCellFields&,
 
@@ -336,6 +337,10 @@ struct ElectricFieldAwareEvaluator {
     for (const double value : electric_field) {
 
       maximum = std::max(maximum, std::abs(value));
+    }
+
+    if (observed_maximum != nullptr) {
+      *observed_maximum = maximum;
     }
 
     reaction_rates[reaction].fill(maximum);
@@ -389,9 +394,20 @@ struct RecordingTraceSink {
       }
     }
   }
+
+  void flush() const noexcept {}
 };
 
 static_assert(pemu::trace::TraceSink<RecordingTraceSink>);
+
+struct FlushCountingTraceSink {
+  std::size_t* flush_count{};
+
+  void operator()(const pemu::trace::TraceEvent&) const noexcept {}
+  void flush() const noexcept { ++*flush_count; }
+};
+
+static_assert(pemu::trace::TraceSink<FlushCountingTraceSink>);
 
 struct CapturedFieldOutput {
   output::OutputStamp stamp;
@@ -460,6 +476,52 @@ class CapturingFieldOutputWriter final : public output::dump::IWriter {
 
   mutable std::vector<CapturedFieldOutput> requests;
   mutable std::size_t finish_count{};
+};
+
+class FailingFinishSeries final : public output::dump::ISeries {
+ public:
+  [[nodiscard]] output::OutputRecord append(
+      const output::dump::Request& request) override {
+    last_record_ = {.path = request.path, .stamp = request.stamp};
+    return last_record_;
+  }
+
+  [[nodiscard]] output::OutputRecord finish() override {
+    throw std::runtime_error("injected field output finish failure");
+  }
+
+ private:
+  output::OutputRecord last_record_;
+};
+
+class FailingFinishWriter final : public output::dump::IWriter {
+ public:
+  [[nodiscard]] std::unique_ptr<output::dump::ISeries> openSeries(
+      const output::dump::SeriesRequest&) const override {
+    return std::make_unique<FailingFinishSeries>();
+  }
+};
+
+class CountingCheckpointReader final : public output::checkpoint::IReader {
+ public:
+  [[nodiscard]] output::checkpoint::Manifest inspect(
+      const std::filesystem::path& path) const override {
+    ++inspect_count;
+    return reader_.inspect(path);
+  }
+
+  [[nodiscard]] output::OutputRecord restore(
+      const std::filesystem::path& path,
+      const output::checkpoint::RestoreRequest& request) const override {
+    ++restore_count;
+    return reader_.restore(path, request);
+  }
+
+  mutable std::size_t inspect_count{};
+  mutable std::size_t restore_count{};
+
+ private:
+  output::checkpoint::VtkHdfReader reader_;
 };
 
 // ============================================================
@@ -1017,7 +1079,9 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
       std::make_unique<linalg::CholmodSolver>());
 
-  ElectricFieldAwareEvaluator evaluator{.reaction = reaction};
+  double evaluator_maximum{};
+  ElectricFieldAwareEvaluator evaluator{.reaction = reaction,
+                                        .observed_maximum = &evaluator_maximum};
 
   FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
@@ -1026,6 +1090,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   const auto result = simulation.advance();
 
   ASSERT_TRUE(result.success());
+  EXPECT_NEAR(evaluator_maximum, 1.0, 1e-12);
 
   // --------------------------------------------------------
   // phi=x -> E=(-1,0)
@@ -1108,9 +1173,10 @@ TEST_F(FixedStepPlasmaSimulationTest,
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
       std::make_unique<linalg::CholmodSolver>());
-  FixedStepPlasmaSimulation simulation(density, reactions, transport,
-                                       NoReactionEvaluator{},
-                                       FixedStepClock(dt, 4));
+  std::size_t flush_count{};
+  FixedStepPlasmaSimulation simulation(
+      density, reactions, transport, NoReactionEvaluator{},
+      FixedStepClock(dt, 4), FlushCountingTraceSink{&flush_count});
 
   EXPECT_EQ(simulation.state(), SimulationState::ready);
   EXPECT_THROW(simulation.pause(), std::logic_error);
@@ -1122,15 +1188,43 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   simulation.pause();
   EXPECT_EQ(simulation.state(), SimulationState::paused);
+  EXPECT_EQ(flush_count, 1u);
   EXPECT_THROW((void)simulation.advance(), std::logic_error);
 
   simulation.start();
   ASSERT_TRUE(simulation.advance().success());
   EXPECT_EQ(simulation.step(), 2u);
+  EXPECT_EQ(flush_count, 2u);
   simulation.stop();
   EXPECT_EQ(simulation.state(), SimulationState::stopped);
+  EXPECT_EQ(flush_count, 3u);
   EXPECT_THROW(simulation.run(), std::logic_error);
   EXPECT_NO_THROW(simulation.stop());
+}
+
+TEST_F(FixedStepPlasmaSimulationTest, StopFailureTransitionsWorkflowToFailed) {
+  constexpr double dt = 0.01;
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  FailingFinishWriter writer;
+  FixedStepPlasmaSimulation simulation(
+      density, reactions, transport, NoReactionEvaluator{},
+      FixedStepClock(dt, 2), trace::NullTraceSink{}, {},
+      {.writer = &writer,
+       .directory = "simulation-output",
+       .file_stem = "failing-finish",
+       .write_initial = true});
+
+  ASSERT_TRUE(simulation.advance().success());
+  ASSERT_EQ(simulation.state(), SimulationState::running);
+  EXPECT_THROW(simulation.stop(), std::runtime_error);
+  EXPECT_EQ(simulation.state(), SimulationState::failed);
 }
 
 TEST_F(FixedStepPlasmaSimulationTest,
@@ -1489,6 +1583,65 @@ TEST_F(FixedStepPlasmaSimulationTest,
       std::invalid_argument);
 }
 
+TEST_F(FixedStepPlasmaSimulationTest,
+       CheckpointRejectsReorderedSpeciesWithoutChangingDensity) {
+  constexpr double dt = 0.01;
+  physics::SpeciesSet original_species;
+  const auto original_ids = addElectronAndIon(original_species);
+  physics::SpeciesCellFields original_density(mesh_, original_species.size(),
+                                              0.0);
+  original_density[original_ids.electron].fill(1.0);
+  original_density[original_ids.ion].fill(2.0);
+  physics::ReactionNetwork original_reactions(original_species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper original_transport(
+      mesh_, original_species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(original_species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  FixedStepPlasmaSimulation original(original_density, original_reactions,
+                                     original_transport, NoReactionEvaluator{},
+                                     FixedStepClock(dt, 2));
+  const auto checkpoint_path =
+      std::filesystem::path{PEMU_SIMULATION_TEST_OUTPUT_DIR} /
+      "species-identity-checkpoint" / "state.vtkhdf";
+  const output::checkpoint::VtkHdfWriter writer;
+  (void)original.saveCheckpoint(writer, checkpoint_path, true);
+
+  physics::SpeciesSet reordered_species;
+  (void)reordered_species.add(
+      {.name = "Ar+",
+       .charge = +1.0,
+       .mobility = 0.5,
+       .diffusivity = 0.1,
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  (void)reordered_species.add(
+      {.name = "e",
+       .charge = -1.0,
+       .mobility = 1.0,
+       .diffusivity = 0.1,
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  physics::SpeciesCellFields reordered_density(mesh_, reordered_species.size(),
+                                               7.0);
+  physics::ReactionNetwork reordered_reactions(reordered_species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper reordered_transport(
+      mesh_, reordered_species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(reordered_species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  FixedStepPlasmaSimulation reordered(
+      reordered_density, reordered_reactions, reordered_transport,
+      NoReactionEvaluator{}, FixedStepClock(dt, 2));
+  const output::checkpoint::VtkHdfReader reader;
+
+  EXPECT_THROW((void)reordered.restoreCheckpoint(reader, checkpoint_path),
+               std::invalid_argument);
+  for (const auto& species_density : reordered_density) {
+    for (const double value : species_density) {
+      EXPECT_DOUBLE_EQ(value, 7.0);
+    }
+  }
+  EXPECT_EQ(reordered.state(), SimulationState::ready);
+  EXPECT_EQ(reordered.step(), 0u);
+}
+
 TEST(AdaptiveTimeClockTest, LandsExactlyOnEndTime) {
   AdaptiveTimeClock clock(0.1);
 
@@ -1587,9 +1740,11 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   AdaptiveStepPlasmaSimulation restored(restored_density, reactions,
                                         restored_transport, evaluator,
                                         AdaptiveTimeClock(0.1));
-  const output::checkpoint::VtkHdfReader reader;
+  const CountingCheckpointReader reader;
   const auto record = restored.restoreCheckpoint(reader, checkpoint_path);
 
+  EXPECT_EQ(reader.inspect_count, 0u);
+  EXPECT_EQ(reader.restore_count, 1u);
   EXPECT_EQ(restored.state(), SimulationState::ready);
   EXPECT_EQ(restored.step(), 1u);
   EXPECT_DOUBLE_EQ(restored.time(), record.stamp.time);
@@ -1846,12 +2001,15 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
       std::make_unique<linalg::CholmodSolver>(),
       {.safety = 0.9, .min_dt = 1e-8, .max_dt = 1e-3, .max_growth = 2.0});
 
+  double evaluator_maximum{};
   AdaptiveStepPlasmaSimulation simulation(
       density, reactions, transport,
-      ElectricFieldAwareEvaluator{.reaction = reaction},
+      ElectricFieldAwareEvaluator{.reaction = reaction,
+                                  .observed_maximum = &evaluator_maximum},
       AdaptiveTimeClock(1e-3));
 
   ASSERT_TRUE(simulation.advance().success());
+  EXPECT_NEAR(evaluator_maximum, 1.0, 1e-12);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulationTest,
@@ -2356,9 +2514,11 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
   FixedStepPlasmaSimulation restored(restored_density, reactions,
                                      restored_transport, evaluator,
                                      FixedStepClock(dt, total_steps));
-  const output::checkpoint::VtkHdfReader checkpoint_reader;
+  const CountingCheckpointReader checkpoint_reader;
   const auto restored_record =
       restored.restoreCheckpoint(checkpoint_reader, checkpoint_path);
+  ASSERT_EQ(checkpoint_reader.inspect_count, 0u);
+  ASSERT_EQ(checkpoint_reader.restore_count, 1u);
   ASSERT_EQ(restored_record.stamp.step, checkpoint_step);
   ASSERT_DOUBLE_EQ(restored_record.stamp.time,
                    static_cast<double>(checkpoint_step) * dt);

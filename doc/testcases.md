@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 206 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 223 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -8,6 +8,7 @@
 
 | 用例 | 保证 |
 | --- | --- |
+| `TraceSinkTest.AnyTraceSinkForwardsNoexceptSink` | 非模板 API 使用的 owning type erasure 同时转发事件与统一的 `flush()` 契约；副本共享底层缓冲状态，空 sink 的两个操作均无副作用。 |
 | `TraceSinkTest.NullSinkAcceptsStructuredEvents` | 默认空 sink 满足 trace concept，能同步接受结构化事件且不产生副作用。 |
 | `PhysicalVolumeSemanticsTest.Extrudes2DMeasuresAndKeeps3DMeasures` | 二维网格的单元面积/面长度乘以面外厚度得到物理体积/面积，而三维网格保持原生几何测度。 |
 | `StatisticsOptionsTest.SamplesOnlyAtConfiguredStepInterval` | 统计探针只在启用且步号满足采样间隔时运行，并拒绝零间隔等非法配置。 |
@@ -17,8 +18,8 @@
 | `TraceSinkTest.OstreamSinkFormatsTabularStructuredEvents` | 普通事件 renderer 保持原有统一事件表格式，将步数、时间、步长、终止时间、求解状态和残差放入稳定对齐列，其余属性进入 DETAILS。 |
 | `TraceSinkTest.StatisticsRendererGroupsRowsAndFormatsDedicatedColumns` | 统计 renderer 按 step 缓冲分组，以 FIELD/UNIT/MIN/MAX/MEAN/RMS/INTEGRAL 独立表格展示多个场；固定采样与体积语义元数据只输出一次，单位来自事件属性而非字段名猜测，零异常计数和 DETAILS 列均不出现。 |
 | `TraceSinkTest.StatisticsRendererOnlyShowsNonZeroCountsAsDiagnostics` | 统计质量计数仅在非零时进入该 step 的 `STATISTICS DIAGNOSTICS` 小节，并保留 Warning/Diagnostic 级别；值为零的 `non_finite` 不输出。 |
-| `TraceSinkTest.OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd` | ostream sink 在每两个 simulation 完成步后刷新文件流，并在正常或失败结束时刷新不足两个时间步的尾部记录。 |
-| `TraceSinkTest.SplitSinkRoutesStatisticsSeparatelyAndFlushesThemEveryTwoSteps` | 双通道 sink 仅把显式标记的统计事件写入统计流，把普通 trace/diagnostic 写入诊断流；即使统计事件自身是 Warning/Diagnostic 也不会串流，并且统计流每两个完成步刷新一次。 |
+| `TraceSinkTest.OstreamSinkFlushesOnlyWhenContractRequestsIt` | ostream sink 只在统一契约的显式 `flush()` 调用时刷新流，不解析 simulation 专属事件名。 |
+| `TraceSinkTest.SplitSinkRoutesChannelsAndForwardsFlush` | 双通道 sink 仅按显式 channel 路由事件，并把统一的 `flush()` 同时转发给两个子 sink，不承担 simulation 刷新策略。 |
 | `EnumStringTest.DomainsAndSeveritiesHaveStableNames` | `DiagDomain` 与 `Severity` 均通过 `pemu::to_string` 映射为稳定、可读的字符串，可供过滤和机器处理使用。 |
 | `TraceSinkTest.NullSinkAcceptsStructuredDiagnostics` | 同一个默认空 trace sink 能无副作用地接受标记为 diagnostic 的结构化事件。 |
 | `TraceSinkTest.OstreamSinkFormatsDiagnosticEvent` | diagnostic renderer 保留根因消息与数值上下文，但与前后的普通事件共用同一个旧式事件表头；普通→diagnostic→普通切换不会插入 TRACE/DIAGNOSTIC 分段标题。 |
@@ -108,6 +109,7 @@
 | 用例 | 保证 |
 | --- | --- |
 | `VtkHdfCheckpointTest.RoundTripsManifestCellAndFaceState` | 版本、step/time、mesh 尺寸、字段 metadata，以及 cell/face/scalar 原始状态能通过独立 checkpoint reader 完整恢复。 |
+| `VtkHdfCheckpointTest.AtomicallyReplacesExistingCheckpoint` | 滚动 checkpoint 通过临时文件原子替换已有状态，恢复得到新值且目标目录不残留临时文件。 |
 | `VtkHdfCheckpointTest.ValidatesAllTargetsBeforeChangingAnyField` | restore 在复制前校验全部目标；任一 metadata 不匹配时不产生部分恢复。 |
 | `VtkHdfCheckpointTest.RejectsKeysThatVtkHdfWouldRewrite` | checkpoint 拒绝含 `.` 或 `/` 的 key，避免 VTKHDF 名称规范化造成恢复歧义。 |
 | `VtkHdfCheckpointTest.RejectsVisualizationDumpWithoutCheckpointManifest` | checkpoint reader 拒绝没有版本化 checkpoint manifest 的普通 VTKHDF dump，确保两类文件不能误用。 |
@@ -286,7 +288,8 @@
 | `FixedStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一步反应率都读取最新密度，而非复用旧值。 |
 | `FixedStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 反应模型读取的是本步泊松求解得到的电场。 |
 | `FixedStepPlasmaSimulationTest.RunAdvancesUntilClockIsFinished` | `run()` 严格运行到固定时钟指定的总步数。 |
-| `FixedStepPlasmaSimulationTest.StateMachineSupportsStartPauseResumeAndStop` | workflow 在 `ready/running/paused/stopped` 间执行合法转换，暂停时拒绝推进，停止后不可再次运行。 |
+| `FixedStepPlasmaSimulationTest.StateMachineSupportsStartPauseResumeAndStop` | workflow 在 `ready/running/paused/stopped` 间执行合法转换，暂停时拒绝推进，停止后不可再次运行；刷新策略在每两个完成步及 pause/stop 生命周期边界调用统一 sink 契约。 |
+| `FixedStepPlasmaSimulationTest.StopFailureTransitionsWorkflowToFailed` | dump series 关闭失败时 `stop()` 不会伪装为成功停止，而是将 workflow 提交为 `failed`。 |
 | `FixedStepPlasmaSimulationTest.EmitsOrderedTraceEventsAtEachPipelineStage` | 固定步长仿真按 run、步开始、电静力、反应率、源项和步提交的顺序发出结构化事件，并报告提交后的时间。 |
 | `FixedStepPlasmaSimulationTest.WritesInitialPeriodicAndFinalFieldSnapshots` | 固定步 simulation 将同步状态在初始、周期及终态交给 output writer，并发出轻量完成 trace。 |
 | `FixedStepPlasmaSimulationTest.EmitsReturnedDiagnosticBeforeStepFailureTrace` | 固定步长仿真消费求解结果中的底层 diagnostic，附加步数和残差上下文，在 `step.failed` 前输出且不提交失败步。 |
@@ -294,6 +297,7 @@
 | `FixedStepPlasmaSimulationTest.RejectsClockTimeStepDifferentFromTransportTimeStep` | 仿真时钟与输运推进器的 $\Delta t$ 必须一致。 |
 | `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
 | `FixedStepPlasmaSimulationTest.StatisticsRejectFieldsWithoutPhysicalMetadata` | 启用物理统计时，simulation 必须在运行前拒绝缺少预期 `QuantityKind + precise_unit` metadata 的场，避免生成无单位或错单位统计。 |
+| `FixedStepPlasmaSimulationTest.CheckpointRejectsReorderedSpeciesWithoutChangingDensity` | checkpoint 将 species ID/name 纳入稳定 key；物种顺序不一致时恢复失败，且目标 density、clock 和状态保持不变。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
 | `AdaptiveStepPlasmaSimulationTest.CheckpointWorkflowRestoresClockDensityAndTimeStepHistory` | simulation 自动保存自适应 checkpoint，并在新 workflow 中恢复 density、step/time 与 `previous_dt`，续算结果和未中断运行一致。 |

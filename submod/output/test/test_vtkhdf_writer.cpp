@@ -158,6 +158,8 @@ class CapturingSink {
     }
   }
 
+  void flush() const noexcept {}
+
   CapturedEvent captured;
 };
 

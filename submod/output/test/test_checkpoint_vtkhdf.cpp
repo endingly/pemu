@@ -152,6 +152,38 @@ TEST(VtkHdfCheckpointTest, RoundTripsManifestCellAndFaceState) {
   }
 }
 
+TEST(VtkHdfCheckpointTest, AtomicallyReplacesExistingCheckpoint) {
+  const mesh::MoabMesh mesh(testMeshPath().string());
+  field::CellField<double> potential(mesh, 1.0, potentialMetadata());
+  const std::array sources{
+      CellFieldSource{.field = &potential, .key = "potential"}};
+  TemporaryDirectory temporary;
+  const auto path = temporary.path() / "rolling.vtkhdf";
+  const VtkHdfWriter writer;
+
+  (void)writer.write(
+      {.mesh = &mesh, .path = path, .cell_fields = sources, .overwrite = true});
+  potential.fill(9.0);
+  (void)writer.write(
+      {.mesh = &mesh, .path = path, .cell_fields = sources, .overwrite = true});
+
+  potential.fill(0.0);
+  const std::array targets{
+      CellFieldTarget{.field = &potential, .key = "potential"}};
+  const VtkHdfReader reader;
+  (void)reader.restore(path, {.mesh = &mesh, .cell_fields = targets});
+  EXPECT_DOUBLE_EQ(potential[0], 9.0);
+  EXPECT_DOUBLE_EQ(potential[1], 9.0);
+
+  std::size_t artifact_count{};
+  for (const auto& entry :
+       std::filesystem::directory_iterator(temporary.path())) {
+    ++artifact_count;
+    EXPECT_EQ(entry.path(), path);
+  }
+  EXPECT_EQ(artifact_count, 1u);
+}
+
 TEST(VtkHdfCheckpointTest, ValidatesAllTargetsBeforeChangingAnyField) {
   const mesh::MoabMesh mesh(testMeshPath().string());
   field::CellField<double> first(mesh, 1.0, potentialMetadata());

@@ -128,15 +128,21 @@ struct TraceEvent {
   };
 }
 
+// Complete synchronous sink contract. operator() consumes the non-owning event
+// before returning; flush publishes any buffered events. Both operations are
+// noexcept so observability failures never alter numerical control flow.
 template <typename Sink>
 concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
   { sink(event) } noexcept -> std::same_as<void>;
+  { sink.flush() } noexcept -> std::same_as<void>;
 };
 
-// The default sink is intentionally empty. When it is held with
-// [[no_unique_address]], tracing adds neither storage nor virtual dispatch.
+// Static no-op policy for template/generic code. Unlike AnyTraceSink's empty
+// runtime state, this type lets the compiler remove both calls and storage
+// (when held with [[no_unique_address]]) without virtual dispatch.
 struct NullTraceSink {
   constexpr void operator()(const TraceEvent&) const noexcept {}
+  constexpr void flush() const noexcept {}
 };
 
 static_assert(TraceSink<NullTraceSink>);

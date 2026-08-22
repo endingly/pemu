@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <pemu/trace/any_trace_sink.hpp>
 #include <pemu/trace/diag.hpp>
 #include <pemu/trace/ostream_trace_sink.hpp>
 #include <pemu/trace/split_trace_sink.hpp>
@@ -16,6 +17,29 @@
 namespace pemu::trace::test {
 
 namespace {
+
+struct CountingSink {
+  std::size_t* count{};
+  std::size_t* flush_count{};
+
+  void operator()(const TraceEvent&) const noexcept { ++*count; }
+  void flush() const noexcept { ++*flush_count; }
+};
+
+struct EventOnlySink {
+  void operator()(const TraceEvent&) const noexcept {}
+};
+
+struct ThrowingSink {
+  void operator()(const TraceEvent&) const {}
+  void flush() const noexcept {}
+};
+
+static_assert(TraceSink<CountingSink>);
+static_assert(!TraceSink<EventOnlySink>);
+static_assert(!TraceSink<ThrowingSink>);
+static_assert(std::constructible_from<AnyTraceSink, CountingSink>);
+static_assert(!std::constructible_from<AnyTraceSink, ThrowingSink>);
 
 class FlushCountingBuffer final : public std::stringbuf {
  public:
@@ -41,6 +65,23 @@ class FlushCountingBuffer final : public std::stringbuf {
 
 }  // namespace
 
+TEST(TraceSinkTest, AnyTraceSinkForwardsNoexceptSink) {
+  std::size_t count{};
+  std::size_t flush_count{};
+  AnyTraceSink sink{CountingSink{.count = &count, .flush_count = &flush_count}};
+  sink({.domain = DiagDomain::simulation, .name = "test"});
+  sink.flush();
+  AnyTraceSink shared_sink = sink;
+  shared_sink({.domain = DiagDomain::simulation, .name = "shared"});
+  shared_sink.flush();
+  EXPECT_EQ(count, 2u);
+  EXPECT_EQ(flush_count, 2u);
+
+  AnyTraceSink empty;
+  EXPECT_NO_THROW(empty({.domain = DiagDomain::simulation, .name = "ignored"}));
+  EXPECT_NO_THROW(empty.flush());
+}
+
 TEST(TraceSinkTest, NullSinkAcceptsStructuredEvents) {
   const std::array attributes{
       TraceAttribute{"step", std::uint64_t{3}},
@@ -56,6 +97,7 @@ TEST(TraceSinkTest, NullSinkAcceptsStructuredEvents) {
 
   NullTraceSink sink;
   EXPECT_NO_THROW(sink(event));
+  EXPECT_NO_THROW(sink.flush());
 }
 
 TEST(PhysicalVolumeSemanticsTest, Extrudes2DMeasuresAndKeeps3DMeasures) {
@@ -320,7 +362,7 @@ TEST(TraceSinkTest, StatisticsRendererOnlyShowsNonZeroCountsAsDiagnostics) {
   EXPECT_EQ(output.str().find("non_finite=0"), std::string::npos);
 }
 
-TEST(TraceSinkTest, OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd) {
+TEST(TraceSinkTest, OstreamSinkFlushesOnlyWhenContractRequestsIt) {
   FlushCountingBuffer buffer;
   std::ostream output(&buffer);
   OstreamTraceSink sink(output);
@@ -329,25 +371,16 @@ TEST(TraceSinkTest, OstreamSinkFlushesEveryTwoSimulationStepsAndOnRunEnd) {
       .category = "adaptive_step",
       .name = "step.completed",
   };
-  const TraceEvent run_completed{
-      .domain = DiagDomain::simulation,
-      .category = "adaptive_step",
-      .name = "run.completed",
-  };
-
   sink(step_completed);
   EXPECT_EQ(buffer.flush_count, 0);
   sink(step_completed);
+  EXPECT_EQ(buffer.flush_count, 0);
+  sink.flush();
   EXPECT_EQ(buffer.flush_count, 1);
-  sink(step_completed);
-  EXPECT_EQ(buffer.flush_count, 1);
-  sink(run_completed);
-  EXPECT_EQ(buffer.flush_count, 2);
   EXPECT_FALSE(sink.failed());
 }
 
-TEST(TraceSinkTest,
-     SplitSinkRoutesStatisticsSeparatelyAndFlushesThemEveryTwoSteps) {
+TEST(TraceSinkTest, SplitSinkRoutesChannelsAndForwardsFlush) {
   std::ostringstream diagnostic_output;
   FlushCountingBuffer statistics_buffer;
   std::ostream statistics_output(&statistics_buffer);
@@ -372,6 +405,8 @@ TEST(TraceSinkTest,
   sink(step_completed);
   EXPECT_EQ(statistics_buffer.flush_count, 0);
   sink(step_completed);
+  EXPECT_EQ(statistics_buffer.flush_count, 0);
+  sink.flush();
 
   EXPECT_NE(statistics_buffer.str().find("STATISTICS"), std::string::npos);
   EXPECT_NE(statistics_buffer.str().find("species"), std::string::npos);

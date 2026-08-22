@@ -67,10 +67,13 @@
 template <typename Sink>
 concept TraceSink = requires(Sink& sink, const TraceEvent& event) {
   { sink(event) } noexcept -> std::same_as<void>;
+  { sink.flush() } noexcept -> std::same_as<void>;
 };
 ```
 
-sink 必须是 `noexcept`，诊断失败不能改变数值推进的控制流。`OstreamTraceSink` 捕获流
+`operator()` 与 `flush()` 共同构成完整契约：前者必须同步消费非拥有事件，后者必须发布
+内部缓冲的数据；不再把 flush 当作通过 `requires` 临时探测的可选能力。两个操作都必须是
+`noexcept`，诊断失败不能改变数值推进的控制流。`OstreamTraceSink` 捕获流
 异常并记录自身的失败状态；其实现使用 fmt 在内部缓冲区中完成格式化，再写入目标流。
 `TraceEvent` 始终是唯一的数据模型，ostream 展示层根据事件语义选择三个分别命名的
 renderer：`OrdinaryEventRenderer`、`DiagnosticEventRenderer` 和
@@ -89,14 +92,27 @@ statistics 会缓冲当前 step 的少量汇总行，在下一个统计 step 到
 一次。`non_finite`、`negative` 和非法权重计数为零时完全隐藏；非零时在对应 step 的
 `STATISTICS DIAGNOSTICS` 小节中按原有 Warning/Error 与 Diagnostic 语义显示。
 
-为支持长时间仿真的 `tail -f` 预览，文件流默认在每两个 simulation 时间步完成后刷新；
-`run.completed` 或 `run.failed` 会无条件刷新尚未刷新的尾部事件。此策略只刷新 C++ 流
-缓冲区以便观察，不提供断电耐久性的 `fsync` 保证。
+为支持长时间仿真的 `tail -f` 预览，simulation workflow 每两个完成时间步请求 sink
+刷新，并在 pause/stop/completed/failed 生命周期边界刷新尾部事件。sink 本身不解析
+simulation 专属事件名；该策略只刷新 C++ 流缓冲区以便观察，不提供断电耐久性的
+`fsync` 保证。
 所有枚举的文本转换统一使用 `pemu::to_string()`；求解状态因此显示稳定字符串（如
 `Success`、`SolveFailed`），
 不输出 `enum class SolverStatus` 的底层整数。
 fmt 只出现在实现文件中，并作为 `pemu::trace` 的私有构建依赖，不会泄漏到公共头文件。
 自定义网络或文件 sink 也应在内部处理重试、丢弃或错误计数。
+
+当前四种 sink/抽象各自只承担一个角色：
+
+- `NullTraceSink` 是给模板或 generic API 使用的静态空策略，可内联消除调用和存储；
+- `OstreamTraceSink` 是同步文本渲染后端，持有 renderer、缓冲状态和流错误状态；
+- `SplitTraceSink<D, S>` 是编译期 channel 组合器，保留两个具体子 sink 类型，不增加虚调用；
+- `AnyTraceSink` 是非模板 API 边界上的 owning type erasure，复制时共享同一个底层 sink 状态。
+
+因此它们不是四套并列接口。热路径和可组合代码仍通过 `TraceSink` concept 静态分派；只有
+`FixedStepPlasmaSimulation`/`AdaptiveStepPlasmaSimulation` 这类需要稳定非模板 API 的 façade
+使用 `AnyTraceSink`，每个事件付出一次虚调用。相对于场扫描、线性求解和文本格式化，这个
+边界开销很小，同时避免把 sink 类型传播到 Simulation 类模板和公开头文件。
 
 ## 4. 结构化诊断模型
 
@@ -151,10 +167,10 @@ sink。根因诊断之后仍可发出 `step.failed`，前者说明“为什么�
 
 ## 5. 与仿真的耦合
 
-固定步长和自适应仿真都增加了第二个模板参数 `TraceSink`，默认值为
-`pemu::trace::NullTraceSink`。sink 由构造函数注入并按值保存；有共享状态需求时，sink
-可以内部持有引用或指针。默认 sink 是空类型，通过 `[[no_unique_address]]` 保存，不引入
-虚调用，也不改变原有调用代码；`if constexpr` 同时跳过默认路径上的事件和属性构造。
+固定步长和自适应仿真是非模板 façade，构造函数接收 `AnyTraceSink` 并在内部共享其底层
+sink 状态；默认构造的 `AnyTraceSink` 为空，调用无副作用。应用仍可直接传入任意满足
+`TraceSink` concept 的具体 sink，由边界自动完成 owning type erasure。simulation 在
+`pause`、`stop`、`completed` 和 `failed` 生命周期边界显式调用 `flush()`，保证缓冲尾部可见。
 
 例如，将自适应仿真的普通 trace/diagnostic 与物理统计分别写入两个文件：
 
@@ -181,8 +197,8 @@ simulation.run();
 `TraceEvent::output_channel` 显式决定事件写入 `Diagnostic` 还是 `Statistics` 通道。
 路由不依赖事件名或严重级别，因此异常统计即使同时具有 `EventKind::Diagnostic` 和
 `Warning/Error` 严重级别，仍完整写入统计文件；普通推进 trace 与各模块 diagnostic
-则只写入诊断文件。`SplitTraceSink` 每两个已完成时间步刷新统计 sink，并在
-`run.completed` 或 `run.failed` 时刷新尾部记录，两个文件可在仿真运行期间独立预览。
+则只写入诊断文件。simulation workflow 的统一 `flush()` 会经 `SplitTraceSink` 同时转发
+到两个子 sink，两个文件可按相同生命周期在仿真运行期间独立预览。
 
 普通 trace 与 diagnostic 在诊断文件中连续使用同一张表，例如：
 
@@ -279,8 +295,9 @@ LLNL Units 可以把等价单位规范化显示，例如 `cm^3` 显示成 `mL`�
 无有效统计量时升级为 `Error/Diagnostic`。后两者的 diagnostic 语义不改变其统计文件归属。
 
 统计扫描的成本为每个采样步 $O(N_sN_c+N_f)$，因此默认关闭。启用后可用
-`sample_every_steps` 独立控制采样频率；`NullTraceSink` 路径通过 `if constexpr` 完全
-跳过事件和统计构造。
+`sample_every_steps` 独立控制采样频率。模板化的 generic 调用方使用 `NullTraceSink` 时
+可由编译器完全消除 sink 调用；非模板 simulation façade 的空 `AnyTraceSink` 仍会构造
+少量栈上事件，但不会分配或执行 I/O。
 
 大规模场结果走独立 output 管线。`FixedStepPlasmaSimulation` 与
 `AdaptiveStepPlasmaSimulation` 已通过 `FieldOutputOptions` 在“初始状态”“每隔若干步”及
