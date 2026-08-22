@@ -18,7 +18,8 @@
 2. [网格、边界与程序组织](doc/mesh-boundary-and-architecture.md)：数据约定及模块边界；
 3. [诊断、日志与中间状态追踪](doc/diagnostics-and-tracing.md)：结构化事件、sink 与仿真耦合；
 4. [Output 持久化](doc/output.md)：VTKHDF dump、metadata、版本化 checkpoint 与恢复；
-5. [测试用例契约](doc/testcases.md)：全部 206 个测试各自保证的性质。
+5. [Simulation workflow](doc/simulation-workflow.md)：轻量状态机、运行控制与 checkpoint 调度；
+6. [测试用例契约](doc/testcases.md)：全部 219 个测试各自保证的性质。
 
 ## 当前适用范围
 

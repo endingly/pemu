@@ -85,6 +85,13 @@ TEST(VtkHdfCheckpointTest, RoundTripsManifestCellAndFaceState) {
       CellFieldSource{.field = &potential, .key = "potential"}};
   const std::array face_sources{FaceFieldSource{
       .field = &electric_field, .key = "normal_electric_field"}};
+  double previous_time_step = 1.25e-9;
+  const field::FieldMetadata previous_time_step_metadata{
+      .name = "adaptive_previous_time_step"};
+  const std::array scalar_sources{
+      ScalarSource{.value = &previous_time_step,
+                   .key = "adaptive_previous_time_step",
+                   .metadata = previous_time_step_metadata}};
   TemporaryDirectory temporary;
   const auto path = temporary.path() / "state.vtkhdf";
 
@@ -95,6 +102,7 @@ TEST(VtkHdfCheckpointTest, RoundTripsManifestCellAndFaceState) {
       .stamp = {.step = 17, .time = 4.5e-8},
       .cell_fields = cell_sources,
       .face_fields = face_sources,
+      .scalars = scalar_sources,
   });
   EXPECT_EQ(written.path, std::filesystem::absolute(path));
 
@@ -105,7 +113,7 @@ TEST(VtkHdfCheckpointTest, RoundTripsManifestCellAndFaceState) {
   EXPECT_DOUBLE_EQ(manifest.stamp.time, 4.5e-8);
   EXPECT_EQ(manifest.num_cells, mesh.numCells());
   EXPECT_EQ(manifest.num_faces, mesh.numFaces());
-  ASSERT_EQ(manifest.fields.size(), 2u);
+  ASSERT_EQ(manifest.fields.size(), 3u);
   EXPECT_EQ(manifest.fields[0].association, FieldAssociation::cell);
   EXPECT_EQ(manifest.fields[0].key, "potential");
   EXPECT_EQ(manifest.fields[0].metadata.name, "electric potential");
@@ -114,21 +122,31 @@ TEST(VtkHdfCheckpointTest, RoundTripsManifestCellAndFaceState) {
             unit::QuantityKind::electric_potential);
   EXPECT_EQ(manifest.fields[0].metadata.physical_quantity->unit(),
             units::precise::V);
+  EXPECT_EQ(manifest.fields[2].association, FieldAssociation::scalar);
+  EXPECT_EQ(manifest.fields[2].key, "adaptive_previous_time_step");
+  EXPECT_EQ(manifest.fields[2].value_count, 1u);
 
   potential.fill(0.0);
   electric_field.fill(0.0);
+  previous_time_step = 0.0;
   const std::array cell_targets{
       CellFieldTarget{.field = &potential, .key = "potential"}};
   const std::array face_targets{FaceFieldTarget{
       .field = &electric_field, .key = "normal_electric_field"}};
+  const std::array scalar_targets{
+      ScalarTarget{.value = &previous_time_step,
+                   .key = "adaptive_previous_time_step",
+                   .metadata = previous_time_step_metadata}};
   const auto restored = reader.restore(path, {.mesh = &mesh,
                                               .cell_fields = cell_targets,
-                                              .face_fields = face_targets});
+                                              .face_fields = face_targets,
+                                              .scalars = scalar_targets});
 
   EXPECT_EQ(restored.stamp.step, 17u);
   EXPECT_DOUBLE_EQ(restored.stamp.time, 4.5e-8);
   EXPECT_DOUBLE_EQ(potential[0], 10.25);
   EXPECT_DOUBLE_EQ(potential[1], -3.5);
+  EXPECT_DOUBLE_EQ(previous_time_step, 1.25e-9);
   for (mesh::FaceId face = 0; face < mesh.numFaces(); ++face) {
     EXPECT_DOUBLE_EQ(electric_field[face], 100.0 + static_cast<double>(face));
   }

@@ -501,7 +501,7 @@ $k_{\mathrm{ion}}$ 宣称为真实气体放电的碰撞模型；后者仍需要 
 
 对一次数值仿真，建议按以下层次判定结果。
 
-1. **代数求解成功。** 每次 `advanceOneStep()` 返回的 `SolverResult` 必须满足
+1. **代数求解成功。** 每次 `advance()` 返回的 `SolverResult` 必须满足
    `success()`，这表明泊松线性后端完成了模式分析、分解和求解，未报告奇异、非正定
    或求解失败。当前 CHOLMOD 与 UMFPACK 后端尚未填充 `residual_norm` 和
    `relative_residual`，因此它们的默认零值不能单独当作残差合格证据；若需要运行时

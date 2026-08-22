@@ -9,12 +9,22 @@ namespace pemu::simulation {
 
 class AdaptiveTimeClock {
  public:
-  explicit AdaptiveTimeClock(double end_time)
+  explicit AdaptiveTimeClock(double end_time, double initial_time = 0.0,
+                             std::size_t initial_step = 0)
 
-      : end_time_(end_time) {
+      : time_(initial_time), end_time_(end_time), step_(initial_step) {
     if (end_time_ <= 0.0) {
 
       throw std::invalid_argument("end time must be positive");
+    }
+    if (!std::isfinite(initial_time) || initial_time < 0.0 ||
+        initial_time > end_time_) {
+      throw std::invalid_argument(
+          "initial time must be finite and lie in [0, end time]");
+    }
+    if (initial_step == 0 && initial_time != 0.0) {
+      throw std::invalid_argument(
+          "a positive initial time requires a completed step");
     }
   }
 

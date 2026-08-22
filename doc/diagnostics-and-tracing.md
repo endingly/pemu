@@ -206,7 +206,10 @@ potential                      | V                | ... | ... |  ... | ... | ...
 
 | 事件 | 发生位置 | 主要属性 |
 | --- | --- | --- |
-| `run.started` | `run()` 进入时 | `step`、`time`、`end_time` |
+| `run.started` | workflow 从 `ready` 进入 `running` | `step`、`time`、`end_time` |
+| `run.resumed` | workflow 从 `paused` 恢复 | `step`、`time`、`end_time` |
+| `run.paused` | `pause()` 在物理步之间暂停 | `step`、`time`、`end_time` |
+| `run.stopped` | `stop()` 主动终止 workflow | `step`、`time`、`end_time` |
 | `step.started` | 读取本步状态之前 | `step`、`time`，以及固定 `dt` 或自适应 `remaining_time` |
 | `electrostatics.completed` | 电荷密度、泊松方程和电场更新成功后 | `solver_status`、残差 |
 | `step.failed` | 电静力求解返回失败状态时 | `solver_status`、残差 |
@@ -219,7 +222,7 @@ potential                      | V                | ... | ... |  ... | ... | ...
 | `timestep.selected` | 自适应推进完成步长选择与状态更新后 | `dt`、输运/正性/稳定性限制 |
 | `step.completed` | 状态更新成功且时钟提交后 | 新 `step`、新 `time`、实际 `dt`、相对残差 |
 | `run.completed` | 时钟到达终止条件后 | `step`、`time`、`end_time` |
-| `run.failed` | `run()` 收到失败的 `SolverResult` 后 | `step`、`time`、`end_time` |
+| `run.failed` | `advance()` 返回失败或 workflow 任务抛出异常后 | `step`、`time`、`end_time` |
 
 这里需要特别注意时间层：四类 statistics 事件位于电静力、反应率和源项均完成之后，
 但在输运更新之前，因此全部描述同一个 $k$ 层状态。`step.completed` 中的密度已经是

@@ -1,565 +1,73 @@
 #pragma once
 
 #include <pemu/equation/adaptive_step_multi_species_drift_diffusion_stepper.hpp>
-#include <pemu/equation/time_integration/adaptive_time_step_controller.hpp>
-#include <pemu/output/dump/trace.hpp>
+#include <pemu/output/checkpoint/i_reader.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_time_clock.hpp>
-#include <pemu/simulation/detail/plasma_field_output.hpp>
-#include <pemu/simulation/detail/plasma_statistics.hpp>
+#include <pemu/simulation/checkpoint.hpp>
 #include <pemu/simulation/field_output.hpp>
+#include <pemu/simulation/plasma_workflow_types.hpp>
+#include <pemu/simulation/simulation_state.hpp>
 #include <pemu/trace/statistics.hpp>
-#include <pemu/trace/trace.hpp>
 
-#include <array>
 #include <cstddef>
-#include <cstdint>
+#include <filesystem>
 #include <memory>
-#include <stdexcept>
-#include <string_view>
-#include <type_traits>
-#include <utility>
 
 namespace pemu::simulation {
 
-template <typename ReactionRateEvaluator,
-          pemu::trace::TraceSink TraceSink = pemu::trace::NullTraceSink>
+/** @brief Stateful workflow for adaptive-step multi-species plasma simulation. */
 class AdaptiveStepPlasmaSimulation {
  public:
   using Stepper = equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper;
-
   using TimeStepProposal = equation::time_integration::TimeStepProposal;
 
-  AdaptiveStepPlasmaSimulation(
-      physics::SpeciesCellFields& density,
-
-      const physics::ReactionNetwork& reaction_network,
-
-      Stepper& transport_stepper,
-
-      ReactionRateEvaluator rate_evaluator,
-
-      AdaptiveTimeClock clock,
-
-      TraceSink trace_sink = {},
-
-      pemu::trace::StatisticsOptions statistics_options = {},
-
-      FieldOutputOptions field_output_options = {})
-
-      : density_(&density),
-
-        reaction_network_(&reaction_network),
-
-        transport_stepper_(&transport_stepper),
-
-        rate_evaluator_(std::move(rate_evaluator)),
-
-        clock_(std::move(clock)),
-
-        trace_sink_(std::move(trace_sink)),
-
-        statistics_options_(statistics_options),
-
-        field_output_options_(std::move(field_output_options)),
-
-        reaction_rates_(density.mesh(), reaction_network.size(), 0.0,
-                        transport_stepper.fieldMetadata().reaction_rate),
-
-        source_(density.mesh(), density.size(), 0.0,
-                transport_stepper.fieldMetadata().number_density_source) {
-    if (density_->size() == 0) {
-
-      throw std::invalid_argument(
-          "simulation density must "
-          "contain species");
-    }
-    detail::validatePlasmaStatisticsConfiguration(
-        statistics_options_, *density_, transport_stepper_->chargeDensity(),
-        transport_stepper_->potential(),
-        transport_stepper_->electricFieldNormal());
-    validateFieldOutputOptions(field_output_options_);
-    if (field_output_options_.enabled()) {
-      field_output_series_ = field_output_options_.writer->openSeries(
-          {.mesh = &transport_stepper_->mesh(),
-           .path = detail::plasmaFieldOutputPath(field_output_options_),
-           .overwrite = field_output_options_.overwrite});
-    }
-  }
+  AdaptiveStepPlasmaSimulation(physics::SpeciesCellFields& density,
+                               const physics::ReactionNetwork& reaction_network,
+                               Stepper& transport_stepper,
+                               PlasmaReactionRateEvaluator rate_evaluator,
+                               AdaptiveTimeClock clock,
+                               PlasmaTraceSink trace_sink = {},
+                               trace::StatisticsOptions statistics_options = {},
+                               FieldOutputOptions field_output_options = {},
+                               CheckpointOptions checkpoint_options = {});
+  ~AdaptiveStepPlasmaSimulation();
 
   AdaptiveStepPlasmaSimulation(const AdaptiveStepPlasmaSimulation&) = delete;
-
   AdaptiveStepPlasmaSimulation& operator=(const AdaptiveStepPlasmaSimulation&) =
       delete;
+  AdaptiveStepPlasmaSimulation(AdaptiveStepPlasmaSimulation&&) noexcept;
+  AdaptiveStepPlasmaSimulation& operator=(
+      AdaptiveStepPlasmaSimulation&&) noexcept;
 
-  // ========================================================
-  // Execute one complete adaptive timestep:
-  //
-  // n^k
-  //   │
-  //   ▼
-  // electrostatics
-  //   │
-  //   ▼
-  // R^k
-  //   │
-  //   ▼
-  // S^k
-  //   │
-  //   ▼
-  // determine dt_k
-  //   │
-  //   ▼
-  // n^(k+1)
-  //   │
-  //   ▼
-  // t_(k+1) = t_k + dt_k
-  // ========================================================
+  void start();
+  void pause();
+  void stop();
+  [[nodiscard]] linalg::SolverResult advance();
+  void run();
 
-  [[nodiscard]]
-  linalg::SolverResult advanceOneStep() {
-    if (clock_.finished()) {
+  [[nodiscard]] SimulationState state() const noexcept;
+  [[nodiscard]] double time() const noexcept;
+  [[nodiscard]] double endTime() const noexcept;
+  [[nodiscard]] double remainingTime() const noexcept;
+  [[nodiscard]] std::size_t step() const noexcept;
+  [[nodiscard]] bool finished() const noexcept;
+  [[nodiscard]] double lastTimeStep() const noexcept;
+  [[nodiscard]] bool hasLastTimeStepProposal() const noexcept;
+  [[nodiscard]] const TimeStepProposal& lastTimeStepProposal() const;
 
-      throw std::out_of_range(
-          "adaptive simulation "
-          "already finished");
-    }
-
-    if constexpr (tracing_enabled_) {
-      emitStepStarted();
-    }
-
-    // ----------------------------------------------------
-    // 1.
-    //
-    // n^k -> rho^k -> phi^k -> E^k
-    // ----------------------------------------------------
-
-    const auto result = transport_stepper_->prepareElectrostatics(*density_);
-
-    if (!result.success()) {
-      if constexpr (tracing_enabled_) {
-        emitDiagnostic(result);
-        emitSolverResult("step.failed", pemu::trace::Severity::Error, result);
-      }
-      return result;
-    }
-
-    if constexpr (tracing_enabled_) {
-      emitSolverResult("electrostatics.completed", pemu::trace::Severity::Trace,
-                       result);
-    }
-
-    writeScheduledFieldOutput(false);
-
-    // ----------------------------------------------------
-    // 2.
-    //
-    // Evaluate reaction rate using:
-    //
-    //     n^k
-    //     phi^k
-    //     E^k
-    // ----------------------------------------------------
-
-    reaction_rates_.fill(0.0);
-
-    rate_evaluator_(*density_,
-
-                    transport_stepper_->potential(),
-
-                    transport_stepper_->electricFieldNormal(),
-
-                    reaction_rates_);
-
-    if constexpr (tracing_enabled_) {
-      emitWorkspaceCompleted("reaction_rates.completed",
-                             reaction_rates_.size());
-    }
-
-    // ----------------------------------------------------
-    // 3.
-    //
-    // R -> S
-    // ----------------------------------------------------
-
-    source_.fill(0.0);
-
-    reaction_network_->accumulateSources(reaction_rates_.span(), source_);
-
-    if constexpr (tracing_enabled_) {
-      emitWorkspaceCompleted("sources.completed", source_.size());
-      emitStatisticsSnapshot();
-    }
-
-    // ----------------------------------------------------
-    // 4.
-    //
-    // Adaptive stepper:
-    //
-    // transport limit
-    // reaction/positivity limit
-    // safety
-    // growth limiter
-    // remaining time
-    //
-    // -> dt_k
-    //
-    // and then:
-    //
-    // n^k -> n^(k+1)
-    // ----------------------------------------------------
-
-    const auto proposal = transport_stepper_->advancePrepared(
-        *density_, source_, clock_.remainingTime());
-
-    if constexpr (tracing_enabled_) {
-      emitTimeStepSelected(proposal);
-    }
-
-    // ----------------------------------------------------
-    // 5.
-    //
-    // Commit time AFTER physical state update succeeds.
-    // ----------------------------------------------------
-
-    clock_.advance(proposal.dt);
-
-    if (clock_.finished() && field_output_options_.enabled()) {
-      const auto final_result =
-          transport_stepper_->prepareElectrostatics(*density_);
-      if (!final_result.success()) {
-        if constexpr (tracing_enabled_) {
-          emitDiagnostic(final_result);
-          emitSolverResult("final_output.electrostatics.failed",
-                           pemu::trace::Severity::Error, final_result);
-        }
-        return final_result;
-      }
-      writeScheduledFieldOutput(true);
-    }
-
-    if constexpr (tracing_enabled_) {
-      emitStepCompleted(proposal.dt, result);
-    }
-
-    return result;
-  }
-
-  // ========================================================
-  // Run until t_end.
-  // ========================================================
-
-  void run() {
-    if constexpr (tracing_enabled_) {
-      emitRunEvent("run.started", pemu::trace::Severity::Info);
-    }
-
-    while (!clock_.finished()) {
-
-      const auto result = advanceOneStep();
-
-      if (!result.success()) {
-
-        if constexpr (tracing_enabled_) {
-          emitRunEvent("run.failed", pemu::trace::Severity::Error);
-        }
-
-        throw std::runtime_error(
-            "adaptive plasma "
-            "simulation failed");
-      }
-    }
-
-    if constexpr (tracing_enabled_) {
-      emitRunEvent("run.completed", pemu::trace::Severity::Info);
-    }
-  }
-
-  // ========================================================
-  // Time
-  // ========================================================
-
-  [[nodiscard]]
-  double time() const noexcept {
-    return clock_.time();
-  }
-
-  [[nodiscard]]
-  double endTime() const noexcept {
-    return clock_.endTime();
-  }
-
-  [[nodiscard]]
-  double remainingTime() const noexcept {
-    return clock_.remainingTime();
-  }
-
-  [[nodiscard]]
-  std::size_t step() const noexcept {
-    return clock_.step();
-  }
-
-  [[nodiscard]]
-  bool finished() const noexcept {
-    return clock_.finished();
-  }
-
-  // ========================================================
-  // Adaptive timestep diagnostics
-  // ========================================================
-
-  [[nodiscard]]
-  double lastTimeStep() const noexcept {
-    return transport_stepper_->previousTimeStep();
-  }
-
-  [[nodiscard]]
-  bool hasLastTimeStepProposal() const noexcept {
-    return transport_stepper_->hasLastTimeStepProposal();
-  }
-
-  [[nodiscard]]
-  const TimeStepProposal& lastTimeStepProposal() const {
-    return transport_stepper_->lastTimeStepProposal();
-  }
-
-  // ========================================================
-  // State
-  // ========================================================
-
-  [[nodiscard]]
-  physics::SpeciesCellFields& density() noexcept {
-    return *density_;
-  }
-
-  [[nodiscard]]
-  const physics::SpeciesCellFields& density() const noexcept {
-    return *density_;
-  }
-
-  // ========================================================
-  // Reaction workspace
-  // ========================================================
-
-  [[nodiscard]]
-  const physics::ReactionRateFields& reactionRates() const noexcept {
-    return reaction_rates_;
-  }
-
-  [[nodiscard]]
-  const physics::SpeciesCellFields& source() const noexcept {
-    return source_;
-  }
-
-  // ========================================================
-  // Electrostatic diagnostics
-  // ========================================================
-
-  [[nodiscard]]
-  const field::CellField<double>& chargeDensity() const noexcept {
-    return transport_stepper_->chargeDensity();
-  }
-
-  [[nodiscard]]
-  const field::CellField<double>& potential() const noexcept {
-    return transport_stepper_->potential();
-  }
-
-  [[nodiscard]]
-  const field::FaceField<double>& electricFieldNormal() const noexcept {
-    return transport_stepper_->electricFieldNormal();
-  }
-
-  [[nodiscard]]
-  const field::FaceField<double>& driftVelocityNormal(
-      physics::SpeciesId id) const {
-    return transport_stepper_->driftVelocityNormal(id);
-  }
+  [[nodiscard]] output::OutputRecord saveCheckpoint() const;
+  [[nodiscard]] output::OutputRecord saveCheckpoint(
+      const output::checkpoint::IWriter& writer,
+      const std::filesystem::path& path, bool overwrite = false) const;
+  [[nodiscard]] output::OutputRecord restoreCheckpoint(
+      const output::checkpoint::IReader& reader,
+      const std::filesystem::path& path);
 
  private:
-  static constexpr bool tracing_enabled_ =
-      !std::same_as<std::remove_cvref_t<TraceSink>, pemu::trace::NullTraceSink>;
-
-  void emitRunEvent(std::string_view name,
-                    pemu::trace::Severity severity) noexcept {
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"time", clock_.time()},
-        pemu::trace::TraceAttribute{"end_time", clock_.endTime()},
-    };
-    emitTrace(name, severity, attributes);
-  }
-
-  void emitStepStarted() noexcept {
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"time", clock_.time()},
-        pemu::trace::TraceAttribute{"remaining_time", clock_.remainingTime()},
-    };
-    emitTrace("step.started", pemu::trace::Severity::Trace, attributes);
-  }
-
-  void emitSolverResult(std::string_view name, pemu::trace::Severity severity,
-                        const linalg::SolverResult& result) noexcept {
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"solver_status",
-                                    pemu::to_string(result.status)},
-        pemu::trace::TraceAttribute{"residual_norm", result.residual_norm},
-        pemu::trace::TraceAttribute{"relative_residual",
-                                    result.relative_residual},
-    };
-    emitTrace(name, severity, attributes);
-  }
-
-  void emitDiagnostic(const linalg::SolverResult& result) noexcept {
-    if (!result.diagnostic) {
-      return;
-    }
-
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"solver_status",
-                                    pemu::to_string(result.status)},
-        pemu::trace::TraceAttribute{"residual_norm", result.residual_norm},
-        pemu::trace::TraceAttribute{"relative_residual",
-                                    result.relative_residual},
-    };
-    auto diagnostic = *result.diagnostic;
-    diagnostic.attributes = attributes;
-    trace_sink_(diagnostic);
-  }
-
-  void emitWorkspaceCompleted(std::string_view name,
-                              std::size_t field_count) noexcept {
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"field_count",
-                                    static_cast<std::uint64_t>(field_count)},
-    };
-    emitTrace(name, pemu::trace::Severity::Trace, attributes);
-  }
-
-  void emitTimeStepSelected(const TimeStepProposal& proposal) noexcept {
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"dt", proposal.dt},
-        pemu::trace::TraceAttribute{"transport_limit",
-                                    proposal.transport_limit},
-        pemu::trace::TraceAttribute{"positivity_limit",
-                                    proposal.positivity_limit},
-        pemu::trace::TraceAttribute{"stability_limit",
-                                    proposal.stability_limit},
-    };
-    emitTrace("timestep.selected", pemu::trace::Severity::Debug, attributes);
-  }
-
-  void emitStepCompleted(double dt,
-                         const linalg::SolverResult& result) noexcept {
-    const std::array attributes{
-        pemu::trace::TraceAttribute{"step",
-                                    static_cast<std::uint64_t>(clock_.step())},
-        pemu::trace::TraceAttribute{"time", clock_.time()},
-        pemu::trace::TraceAttribute{"dt", dt},
-        pemu::trace::TraceAttribute{"relative_residual",
-                                    result.relative_residual},
-    };
-    emitTrace("step.completed", pemu::trace::Severity::Info, attributes);
-  }
-
-  void emitStatisticsSnapshot() noexcept {
-    detail::emitPlasmaStatistics(
-        trace_sink_, transport_stepper_->species(), *density_,
-        transport_stepper_->chargeDensity(), transport_stepper_->potential(),
-        transport_stepper_->electricFieldNormal(), statistics_options_,
-        clock_.step(), clock_.time());
-  }
-
-  /**
-   * @brief Captures a selected synchronized state and finalizes the series at
-   * the terminal state.
-   * @param terminal Whether the state is the terminal simulation state.
-   */
-  void writeScheduledFieldOutput(bool terminal) {
-    if (!field_output_options_.enabled()) {
-      return;
-    }
-
-    if (detail::shouldWritePlasmaFieldSnapshot(
-            field_output_options_, clock_.step(), terminal)) {
-      (void)detail::writePlasmaFieldSnapshot(
-          *density_, *transport_stepper_, field_output_options_,
-          *field_output_series_,
-          {.step = static_cast<std::uint64_t>(clock_.step()),
-           .time = clock_.time()});
-      field_output_has_snapshots_ = true;
-    }
-    if (terminal && field_output_has_snapshots_) {
-      const auto record = field_output_series_->finish();
-      if constexpr (tracing_enabled_) {
-        output::dump::traceCompleted(trace_sink_, record);
-      }
-    }
-  }
-
-  template <std::size_t N>
-  void emitTrace(
-      std::string_view name, pemu::trace::Severity severity,
-      const std::array<pemu::trace::TraceAttribute, N>& attributes) noexcept {
-    trace_sink_({.domain = pemu::trace::DiagDomain::simulation,
-                 .category = "adaptive_step",
-                 .name = name,
-                 .severity = severity,
-                 .attributes = attributes});
-  }
-
-  // --------------------------------------------------------
-  // External state
-  // --------------------------------------------------------
-
-  physics::SpeciesCellFields* density_;
-
-  const physics::ReactionNetwork* reaction_network_;
-
-  Stepper* transport_stepper_;
-
-  // --------------------------------------------------------
-  // Physics evaluator
-  // --------------------------------------------------------
-
-  ReactionRateEvaluator rate_evaluator_;
-
-  // --------------------------------------------------------
-  // Adaptive simulation clock
-  // --------------------------------------------------------
-
-  AdaptiveTimeClock clock_;
-
-  [[no_unique_address]] TraceSink trace_sink_;
-
-  pemu::trace::StatisticsOptions statistics_options_;
-
-  FieldOutputOptions field_output_options_;
-
-  std::unique_ptr<output::dump::ISeries> field_output_series_;
-
-  bool field_output_has_snapshots_{};
-
-  // --------------------------------------------------------
-  // Workspaces
-  // --------------------------------------------------------
-
-  physics::ReactionRateFields reaction_rates_;
-
-  physics::SpeciesCellFields source_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace pemu::simulation

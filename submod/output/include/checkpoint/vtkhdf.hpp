@@ -5,7 +5,7 @@
 
 namespace pemu::output::checkpoint {
 
-inline constexpr std::uint32_t vtkhdf_format_version = 1;
+inline constexpr std::uint32_t vtkhdf_format_version = 2;
 
 /** @brief Writes exact restart fields into a versioned VTKHDF checkpoint. */
 class VtkHdfWriter final : public IWriter {

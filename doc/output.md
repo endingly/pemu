@@ -64,7 +64,7 @@ pemu::simulation::FieldOutputOptions output_options{
     .write_final = true,
 };
 
-// output_options 是 Fixed/AdaptiveStepPlasmaSimulation 构造函数的最后一个参数。
+// output_options 位于末尾的 checkpoint_options 之前。
 // writer 必须在 simulation 完成前保持存活。
 ```
 
@@ -72,6 +72,9 @@ pemu::simulation::FieldOutputOptions output_options{
 物种字段使用带 SpeciesId 的稳定输出名称，例如 `species_0_e_number_density`，以避免
 同类物种字段共用 metadata 名称时产生 VTK 数组重名。整个时间序列成功完成后，若配置了
 trace sink，会发出一次轻量的 `output.completed` 事件，属性中的 step/time 对应末个快照。
+
+simulation 的运行状态、`start/advance/pause/stop/run` 语义以及自动 checkpoint 调度见
+[Simulation workflow](simulation-workflow.md)。
 
 ## 转换与内存模型
 
@@ -117,6 +120,7 @@ manifest 和语义互不替代：普通 dump 文件没有 checkpoint marker，re
 - 完整 points/cells，以及按 FaceId 排列的 owner、neighbor、center、area、normal 和
   boundary id 校验数组；
 - 所选 CellField/FaceField 的原始 double 值；
+- 可选 scalar workflow 状态（例如自适应推进的 `previous_dt`）；
 - association、稳定 key、原字段 metadata name、quantity kind、unit 与值数量。
 
 VTKHDF 会改写数组名中的 `.` 和 `/`，所以 checkpoint key 明确禁止这两个字符，避免恢复
@@ -146,7 +150,8 @@ reader.restore("state.vtkhdf", {
 ```
 
 checkpoint 保存由调用方明确选择的数值状态；外部配置、reaction network、边界条件和求解器
-实例仍由应用构造。恢复后的 `manifest.stamp` 用于重建相应的 simulation clock。
+实例仍由应用构造。底层 reader/writer 仍可独立使用；通常由 simulation workflow 自动选择
+物种密度、恢复 clock，并为自适应推进保存/恢复步长历史。
 
 ## 可读性验证
 

@@ -13,7 +13,7 @@
 
 namespace pemu::output::checkpoint {
 
-enum class FieldAssociation : std::uint8_t { cell, face };
+enum class FieldAssociation : std::uint8_t { cell, face, scalar };
 
 /** @brief Selects an immutable cell field for a checkpoint. */
 struct CellFieldSource {
@@ -27,6 +27,13 @@ struct FaceFieldSource {
   std::string key;
 };
 
+/** @brief Selects an immutable scalar workflow value for a checkpoint. */
+struct ScalarSource {
+  const double* value{};
+  std::string key;
+  field::FieldMetadata metadata;
+};
+
 /** @brief Complete request for one restartable checkpoint artifact. */
 struct WriteRequest {
   const mesh::IMesh* mesh{};
@@ -34,6 +41,7 @@ struct WriteRequest {
   OutputStamp stamp;
   std::span<const CellFieldSource> cell_fields;
   std::span<const FaceFieldSource> face_fields;
+  std::span<const ScalarSource> scalars;
   bool overwrite{};
 };
 
@@ -49,11 +57,19 @@ struct FaceFieldTarget {
   std::string key;
 };
 
+/** @brief Selects a mutable scalar workflow value restored by key. */
+struct ScalarTarget {
+  double* value{};
+  std::string key;
+  field::FieldMetadata metadata;
+};
+
 /** @brief Request for an all-or-nothing restore into an existing mesh state. */
 struct RestoreRequest {
   const mesh::IMesh* mesh{};
   std::span<const CellFieldTarget> cell_fields;
   std::span<const FaceFieldTarget> face_fields;
+  std::span<const ScalarTarget> scalars;
   bool require_all_fields{true};
 };
 

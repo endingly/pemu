@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <pemu/equation/detail/explicit_multi_species_drift_diffusion_operator.hpp>
@@ -172,6 +173,16 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
   void resetTimeStepHistory() noexcept {
     previous_dt_ = 0.0;
 
+    has_last_proposal_ = false;
+  }
+
+  /** @brief Restores the growth-limiter history required by a restart. */
+  void restoreTimeStepHistory(double previous_dt) {
+    if (!std::isfinite(previous_dt) || previous_dt < 0.0) {
+      throw std::invalid_argument(
+          "previous timestep must be finite and non-negative");
+    }
+    previous_dt_ = previous_dt;
     has_last_proposal_ = false;
   }
 

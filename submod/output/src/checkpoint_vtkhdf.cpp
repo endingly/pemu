@@ -212,27 +212,32 @@ void addManifest(vtkUnstructuredGrid& grid, const WriteRequest& request) {
   value_counts->SetName(kValueCountArray.data());
 
   const auto add_field = [&](std::string_view association, std::string_view key,
-                             const auto& values) {
+                             const field::FieldMetadata& metadata,
+                             std::size_t value_count) {
     associations->InsertNextValue(std::string{association});
     keys->InsertNextValue(std::string{key});
-    metadata_names->InsertNextValue(values.metadata().name);
-    if (values.metadata().physical_quantity.has_value()) {
-      quantity_kinds->InsertNextValue(std::string{
-          pemu::to_string(values.metadata().physical_quantity->kind())});
-      field_units->InsertNextValue(
-          unitName(*values.metadata().physical_quantity));
+    metadata_names->InsertNextValue(metadata.name);
+    if (metadata.physical_quantity.has_value()) {
+      quantity_kinds->InsertNextValue(
+          std::string{pemu::to_string(metadata.physical_quantity->kind())});
+      field_units->InsertNextValue(unitName(*metadata.physical_quantity));
     } else {
       quantity_kinds->InsertNextValue("");
       field_units->InsertNextValue("");
     }
-    value_counts->InsertNextValue(static_cast<std::uint64_t>(values.size()));
+    value_counts->InsertNextValue(static_cast<std::uint64_t>(value_count));
   };
 
   for (const auto& source : request.cell_fields) {
-    add_field("cell", source.key, *source.field);
+    add_field("cell", source.key, source.field->metadata(),
+              source.field->size());
   }
   for (const auto& source : request.face_fields) {
-    add_field("face", source.key, *source.field);
+    add_field("face", source.key, source.field->metadata(),
+              source.field->size());
+  }
+  for (const auto& source : request.scalars) {
+    add_field("scalar", source.key, source.metadata, 1);
   }
 
   field_data.AddArray(associations);
@@ -257,6 +262,22 @@ void validateSources(const mesh::IMesh& mesh, std::span<const Source> sources,
     validateKey(source.key);
     if (!keys.insert(source.key).second) {
       throw std::invalid_argument("duplicate checkpoint field key");
+    }
+  }
+}
+
+void validateScalarSources(std::span<const ScalarSource> sources,
+                           std::unordered_set<std::string>& keys) {
+  for (const auto& source : sources) {
+    if (source.value == nullptr) {
+      throw std::invalid_argument("checkpoint scalar source must not be null");
+    }
+    if (!std::isfinite(*source.value)) {
+      throw std::invalid_argument("checkpoint scalar must be finite");
+    }
+    validateKey(source.key);
+    if (!keys.insert(source.key).second) {
+      throw std::invalid_argument("duplicate checkpoint scalar key");
     }
   }
 }
@@ -381,6 +402,7 @@ template <typename Value>
   }
 
   std::unordered_set<std::string> unique_fields;
+  std::unordered_set<std::string> unique_field_data_keys;
   loaded.manifest.fields.reserve(static_cast<std::size_t>(count));
   for (vtkIdType i = 0; i < count; ++i) {
     const std::string association = associations->GetValue(i);
@@ -391,12 +413,19 @@ template <typename Value>
       descriptor.association = FieldAssociation::cell;
     } else if (association == "face") {
       descriptor.association = FieldAssociation::face;
+    } else if (association == "scalar") {
+      descriptor.association = FieldAssociation::scalar;
     } else {
       throw std::runtime_error("invalid checkpoint field association");
     }
     const std::string unique_key = association + ":" + key;
     if (!unique_fields.insert(unique_key).second) {
       throw std::runtime_error("duplicate checkpoint field manifest entry");
+    }
+    if (descriptor.association != FieldAssociation::cell &&
+        !unique_field_data_keys.insert(key).second) {
+      throw std::runtime_error(
+          "checkpoint face and scalar storage keys collide");
     }
     descriptor.key = key;
     descriptor.metadata.name = metadata_names->GetValue(i);
@@ -428,7 +457,9 @@ template <typename Value>
     const std::size_t expected =
         descriptor.association == FieldAssociation::cell
             ? loaded.manifest.num_cells
-            : loaded.manifest.num_faces;
+        : descriptor.association == FieldAssociation::face
+            ? loaded.manifest.num_faces
+            : 1;
     if (descriptor.value_count != expected) {
       throw std::runtime_error("checkpoint field has invalid association size");
     }
@@ -587,6 +618,40 @@ void copyFaceTargets(std::span<const FaceFieldTarget> targets,
   }
 }
 
+void validateScalarTargets(const RestoreRequest& request,
+                           const LoadedCheckpoint& loaded,
+                           std::unordered_set<std::string>& keys) {
+  for (const auto& target : request.scalars) {
+    if (target.value == nullptr) {
+      throw std::invalid_argument("checkpoint scalar target must not be null");
+    }
+    validateKey(target.key);
+    const std::string unique_key =
+        std::to_string(static_cast<unsigned int>(FieldAssociation::scalar)) +
+        ":" + target.key;
+    if (!keys.insert(unique_key).second) {
+      throw std::invalid_argument("duplicate checkpoint restore target");
+    }
+    const auto& descriptor =
+        findDescriptor(loaded.manifest, FieldAssociation::scalar, target.key);
+    if (descriptor.value_count != 1) {
+      throw std::invalid_argument("checkpoint scalar size differs");
+    }
+    if (!metadataMatches(target.metadata, descriptor.metadata)) {
+      throw std::invalid_argument("checkpoint scalar metadata differs");
+    }
+  }
+}
+
+void copyScalarTargets(std::span<const ScalarTarget> targets,
+                       vtkUnstructuredGrid& grid) {
+  for (const auto& target : targets) {
+    auto* values = vtkDoubleArray::SafeDownCast(
+        grid.GetFieldData()->GetArray(target.key.c_str()));
+    *target.value = values->GetValue(0);
+  }
+}
+
 }  // namespace
 
 OutputRecord VtkHdfWriter::write(const WriteRequest& request) const {
@@ -607,9 +672,10 @@ OutputRecord VtkHdfWriter::write(const WriteRequest& request) const {
   }
 
   std::unordered_set<std::string> cell_keys;
-  std::unordered_set<std::string> face_keys;
+  std::unordered_set<std::string> field_data_keys;
   validateSources(*request.mesh, request.cell_fields, cell_keys);
-  validateSources(*request.mesh, request.face_fields, face_keys);
+  validateSources(*request.mesh, request.face_fields, field_data_keys);
+  validateScalarSources(request.scalars, field_data_keys);
   auto grid = common::toVtkUnstructuredGrid(*request.mesh);
   addFaceTopology(*grid, *request.mesh);
   for (const auto& source : request.cell_fields) {
@@ -618,6 +684,10 @@ OutputRecord VtkHdfWriter::write(const WriteRequest& request) const {
   for (const auto& source : request.face_fields) {
     grid->GetFieldData()->AddArray(
         copyValues(source.key, source.field->span()));
+  }
+  for (const auto& source : request.scalars) {
+    grid->GetFieldData()->AddArray(
+        copyValues(source.key, std::span<const double>{source.value, 1}));
   }
   addManifest(*grid, request);
 
@@ -648,9 +718,10 @@ OutputRecord VtkHdfReader::restore(const std::filesystem::path& requested_path,
       !topologyMatches(*request.mesh, *loaded.grid)) {
     throw std::invalid_argument("checkpoint mesh topology differs");
   }
-  if (request.require_all_fields &&
-      request.cell_fields.size() + request.face_fields.size() !=
-          loaded.manifest.fields.size()) {
+  if (request.require_all_fields && request.cell_fields.size() +
+                                            request.face_fields.size() +
+                                            request.scalars.size() !=
+                                        loaded.manifest.fields.size()) {
     throw std::invalid_argument(
         "checkpoint restore does not target every stored field");
   }
@@ -660,8 +731,10 @@ OutputRecord VtkHdfReader::restore(const std::filesystem::path& requested_path,
                   keys);
   validateTargets(request, request.face_fields, FieldAssociation::face, loaded,
                   keys);
+  validateScalarTargets(request, loaded, keys);
   copyCellTargets(request.cell_fields, *loaded.grid);
   copyFaceTargets(request.face_fields, *loaded.grid);
+  copyScalarTargets(request.scalars, *loaded.grid);
   return {.path = normalizedPath(requested_path),
           .stamp = loaded.manifest.stamp};
 }
