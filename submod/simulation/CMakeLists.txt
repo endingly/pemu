@@ -11,6 +11,7 @@ target_link_libraries(
     simulation
     PUBLIC
     pemu::equation
+    pemu::output
     pemu::trace
 )
 
@@ -23,6 +24,7 @@ if(BUILD_TESTING)
         test_simulation
         PRIVATE
         PEMU_MESH_TEST_DATA_DIR="${PEMU_MESH_TEST_DATA_DIR}"
+        PEMU_SIMULATION_TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/output"
     )
     gtest_discover_tests(test_simulation)
 endif()

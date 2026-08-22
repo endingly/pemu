@@ -5,11 +5,21 @@
 
 namespace pemu::output {
 
+/** @brief Creates single-file VTKHDF field time series. */
 class VtkHdfWriter final : public IFieldOutputWriter {
  public:
+  /** @copydoc IFieldOutputWriter::openSeries */
   [[nodiscard]]
-  OutputRecord write(const FieldDumpRequest& request) const override;
+  std::unique_ptr<IFieldOutputSeries> openSeries(
+      const FieldSeriesRequest& request) const override;
 
+  /**
+   * @brief Writes one snapshot and emits its completed-file trace event.
+   * @tparam Sink Trace-sink type.
+   * @param request Complete standalone field-dump request.
+   * @param sink Trace sink receiving the completion event.
+   * @return Record identifying the completed file.
+   */
   template <trace::TraceSink Sink>
   [[nodiscard]] OutputRecord writeAndTrace(const FieldDumpRequest& request,
                                            Sink& sink) const {

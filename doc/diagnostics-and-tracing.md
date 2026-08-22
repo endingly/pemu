@@ -279,9 +279,11 @@ LLNL Units 可以把等价单位规范化显示，例如 `cm^3` 显示成 `mL`�
 `sample_every_steps` 独立控制采样频率；`NullTraceSink` 路径通过 `if constexpr` 完全
 跳过事件和统计构造。
 
-大规模场结果则走独立 output 管线。建议由 simulation 在“初始状态”“每隔若干步”及
-“终止状态”提供一致的 snapshot 观察点，output 模块负责深拷贝或同步写出。日志过滤、
-结果采样频率和数值推进步长应彼此独立。
+大规模场结果走独立 output 管线。`FixedStepPlasmaSimulation` 与
+`AdaptiveStepPlasmaSimulation` 已通过 `FieldOutputOptions` 在“初始状态”“每隔若干步”及
+“终止状态”提供一致的 snapshot 观察点；output 模块将这些状态组成单个时间序列文件，
+trace 在 series 完成后只接收一次轻量完成事件。
+日志过滤、结果采样频率和数值推进步长彼此独立。
 
 ## 7. 当前限制
 

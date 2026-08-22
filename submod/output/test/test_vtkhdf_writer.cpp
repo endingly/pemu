@@ -43,9 +43,8 @@ std::filesystem::path testMeshPath() {
 class TemporaryDirectory {
  public:
   TemporaryDirectory() {
-    const auto nonce = std::chrono::steady_clock::now()
-                           .time_since_epoch()
-                           .count();
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
     path_ = std::filesystem::temp_directory_path() /
             ("pemu-vtkhdf-test-" + std::to_string(nonce));
     std::filesystem::create_directories(path_);
@@ -65,17 +64,19 @@ class TemporaryDirectory {
 field::FieldMetadata potentialMetadata() {
   return {
       .name = "potential",
-      .physical_quantity = unit::PhysicalQuantityMetadata{
-          unit::QuantityKind::electric_potential, units::precise::V},
+      .physical_quantity =
+          unit::PhysicalQuantityMetadata{unit::QuantityKind::electric_potential,
+                                         units::precise::V},
   };
 }
 
 field::FieldMetadata faceFluxMetadata() {
   return {
       .name = "face_flux",
-      .physical_quantity = unit::PhysicalQuantityMetadata{
-          unit::QuantityKind::normal_electric_field_strength,
-          units::precise::V / units::precise::cm},
+      .physical_quantity =
+          unit::PhysicalQuantityMetadata{
+              unit::QuantityKind::normal_electric_field_strength,
+              units::precise::V / units::precise::cm},
   };
 }
 
@@ -162,8 +163,7 @@ class CapturingSink {
 };
 
 static_assert(trace::TraceSink<CapturingSink>);
-static_assert(
-    std::has_virtual_destructor_v<ICheckpointWriter<CapturedEvent>>);
+static_assert(std::has_virtual_destructor_v<ICheckpointWriter<CapturedEvent>>);
 
 }  // namespace
 
@@ -271,8 +271,72 @@ TEST(ParaViewReadabilityTest,
   EXPECT_TRUE(hasMetadataRow(*grid->GetFieldData(), "face", "face_flux",
                              "normal_electric_field_strength", "V/cm"));
   EXPECT_TRUE(hasMetadataRow(*grid->GetFieldData(), "cell_visualization",
-                             "face_flux_viz",
-                             "normal_electric_field_strength", "V/cm"));
+                             "face_flux_viz", "normal_electric_field_strength",
+                             "V/cm"));
+}
+
+TEST(ParaViewReadabilityTest,
+     SingleVtkHdfFileRoundTripsAnOrderedTemporalSeries) {
+  const mesh::MoabMesh mesh(testMeshPath().string());
+  field::CellField<double> potential(mesh, potentialMetadata());
+  const std::array cell_fields{
+      std::cref(static_cast<const field::CellField<double>&>(potential))};
+  TemporaryDirectory temporary;
+  const auto path = temporary.path() / "temporal.vtkhdf";
+
+  const VtkHdfWriter writer;
+  auto series = writer.openSeries(
+      {.mesh = &mesh, .path = path, .overwrite = false});
+  potential[0] = 10.0;
+  potential[1] = 20.0;
+  (void)series->append({.mesh = &mesh,
+                        .path = path,
+                        .stamp = {.step = 0, .time = 0.0},
+                        .cell_fields = cell_fields});
+  potential[0] = 30.0;
+  potential[1] = 40.0;
+  (void)series->append({.mesh = &mesh,
+                        .path = path,
+                        .stamp = {.step = 3, .time = 2.5e-6},
+                        .cell_fields = cell_fields});
+  const auto record = series->finish();
+
+  EXPECT_EQ(record.path, std::filesystem::absolute(path));
+  EXPECT_EQ(record.stamp.step, 3u);
+  std::size_t regular_file_count = 0;
+  for (const auto& entry :
+       std::filesystem::directory_iterator{temporary.path()}) {
+    regular_file_count += entry.is_regular_file() ? 1u : 0u;
+  }
+  EXPECT_EQ(regular_file_count, 1u);
+
+  vtkNew<vtkHDFReader> reader;
+  reader->SetFileName(path.string().c_str());
+  reader->Update();
+  ASSERT_EQ(reader->GetNumberOfSteps(), 2);
+
+  reader->SetStep(0);
+  reader->Update();
+  auto* first = vtkUnstructuredGrid::SafeDownCast(reader->GetOutputDataObject(0));
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(first->GetCellData()->GetArray("potential"), nullptr);
+  EXPECT_DOUBLE_EQ(first->GetCellData()->GetArray("potential")->GetTuple1(0),
+                   10.0);
+  EXPECT_EQ(static_cast<std::uint64_t>(
+                first->GetFieldData()->GetArray("pemu_step")->GetTuple1(0)),
+            0u);
+
+  reader->SetStep(1);
+  reader->Update();
+  auto* last = vtkUnstructuredGrid::SafeDownCast(reader->GetOutputDataObject(0));
+  ASSERT_NE(last, nullptr);
+  ASSERT_NE(last->GetCellData()->GetArray("potential"), nullptr);
+  EXPECT_DOUBLE_EQ(last->GetCellData()->GetArray("potential")->GetTuple1(0),
+                   30.0);
+  EXPECT_EQ(static_cast<std::uint64_t>(
+                last->GetFieldData()->GetArray("pemu_step")->GetTuple1(0)),
+            3u);
+  EXPECT_NEAR(reader->GetTimeValue(), 2.5e-6, 1.0e-12);
 }
 
 TEST(OutputTraceTest, EmitsOnlyLightweightCompletionContextAfterWrite) {
@@ -302,6 +366,26 @@ TEST(OutputTraceTest, EmitsOnlyLightweightCompletionContextAfterWrite) {
   EXPECT_DOUBLE_EQ(sink.captured.time, 0.5);
 }
 
+TEST(VtkHdfWriterTest, UsesCellFieldSelectionNameWithoutChangingMetadata) {
+  const mesh::MoabMesh mesh(testMeshPath().string());
+  field::CellField<double> potential(mesh, 3.0, potentialMetadata());
+  const std::array selections{
+      CellFieldSelection{.field = &potential, .name = "species_0_potential"}};
+  TemporaryDirectory temporary;
+  const auto path = temporary.path() / "selected-name.vtkhdf";
+
+  const VtkHdfWriter writer;
+  (void)writer.write(
+      {.mesh = &mesh, .path = path, .cell_field_selections = selections});
+
+  const auto grid = readGrid(path);
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(grid->GetCellData(), nullptr);
+  EXPECT_NE(grid->GetCellData()->GetArray("species_0_potential"), nullptr);
+  EXPECT_TRUE(hasMetadataRow(*grid->GetFieldData(), "cell",
+                             "species_0_potential", "electric_potential", "V"));
+}
+
 TEST(VtkHdfWriterTest, RefusesOverwriteUnlessExplicitlyEnabled) {
   const mesh::MoabMesh mesh(testMeshPath().string());
   field::CellField<double> potential(mesh, 3.0, potentialMetadata());
@@ -312,17 +396,16 @@ TEST(VtkHdfWriterTest, RefusesOverwriteUnlessExplicitlyEnabled) {
   const VtkHdfWriter writer;
   CapturingSink sink;
 
-  (void)writer.write(
-      {.mesh = &mesh, .path = path, .cell_fields = cell_fields});
+  (void)writer.write({.mesh = &mesh, .path = path, .cell_fields = cell_fields});
   EXPECT_THROW(
-      writer.writeAndTrace(
+      auto _ = writer.writeAndTrace(
           {.mesh = &mesh, .path = path, .cell_fields = cell_fields}, sink),
       std::filesystem::filesystem_error);
   EXPECT_EQ(sink.captured.attribute_count, 0u);
-  EXPECT_NO_THROW(writer.write({.mesh = &mesh,
-                                .path = path,
-                                .cell_fields = cell_fields,
-                                .overwrite = true}));
+  EXPECT_NO_THROW(auto _ = writer.write({.mesh = &mesh,
+                                         .path = path,
+                                         .cell_fields = cell_fields,
+                                         .overwrite = true}));
 }
 
 }  // namespace pemu::output::test

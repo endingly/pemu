@@ -342,7 +342,8 @@ $p\approx2$ 说明二阶空间行为；固定空间网格、时间步逐半而�
 Gmsh 网格上推进多物种漂移扩散—泊松—反应系统。工程内置的较大网格文件名为
 `data/meshfiles/poisson_64x64.msh`；它包含 $64\times64=4096$ 个控制体。求解结果
 保存在调用方传入的 `SpeciesCellFields` 中，可通过 `simulation.density()` 读取；目前
-项目尚未提供将这些场写出为 VTK、CSV 等后处理文件的输出模块。
+可通过 `FieldOutputOptions` 接入 VTKHDF 后处理输出；它会写出同步的物种密度、电势和
+电场等场数据，详见 `doc/output.md`。
 
 ### 9.1 64×64 均匀电离回归算例
 
