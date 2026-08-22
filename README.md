@@ -17,7 +17,7 @@
 1. [数学模型与离散化](doc/mathematics-and-discretization.md)：方程、符号、面通量和离散精度；
 2. [网格、边界与程序组织](doc/mesh-boundary-and-architecture.md)：数据约定及模块边界；
 3. [诊断、日志与中间状态追踪](doc/diagnostics-and-tracing.md)：结构化事件、sink 与仿真耦合；
-4. [VTKHDF 场输出](doc/output.md)：网格/场映射、face 数据关联与 checkpoint 边界；
+4. [Output 持久化](doc/output.md)：VTKHDF dump、metadata、版本化 checkpoint 与恢复；
 5. [测试用例契约](doc/testcases.md)：全部 206 个测试各自保证的性质。
 
 ## 当前适用范围

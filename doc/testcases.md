@@ -100,7 +100,17 @@
 | `ParaViewReadabilityTest.SingleVtkHdfFileRoundTripsAnOrderedTemporalSeries` | 两个不同 step/time 和场值通过一个 series 写入唯一的 VTKHDF 文件，官方 reader 能枚举并逐步读回。 |
 | `OutputTraceTest.EmitsOnlyLightweightCompletionContextAfterWrite` | 成功输出后只向 trace 发出 `output.completed` 及 `path/step/time` 三个轻量属性，不把场数组塞入 trace。 |
 | `VtkHdfWriterTest.UsesCellFieldSelectionNameWithoutChangingMetadata` | 写出名称可覆盖而无需复制数据，且 quantity/unit metadata 仍与原字段一致。 |
+| `VtkHdfWriterTest.WritesExplicitSelectionMetadata` | selection 提供的 semantic name、quantity kind 与 unit 会写入 VTKHDF metadata，且 VTK 数组名保持独立。 |
 | `VtkHdfWriterTest.RefusesOverwriteUnlessExplicitlyEnabled` | writer 默认拒绝覆盖已有文件，只有请求显式设置 `overwrite` 时才覆盖。 |
+
+## VTKHDF checkpoint（`submod/output/test/test_checkpoint_vtkhdf.cpp`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `VtkHdfCheckpointTest.RoundTripsManifestCellAndFaceState` | 版本、step/time、mesh 尺寸、字段 metadata 与 cell/face 原始值能通过独立 checkpoint reader 完整恢复。 |
+| `VtkHdfCheckpointTest.ValidatesAllTargetsBeforeChangingAnyField` | restore 在复制前校验全部目标；任一 metadata 不匹配时不产生部分恢复。 |
+| `VtkHdfCheckpointTest.RejectsKeysThatVtkHdfWouldRewrite` | checkpoint 拒绝含 `.` 或 `/` 的 key，避免 VTKHDF 名称规范化造成恢复歧义。 |
+| `VtkHdfCheckpointTest.RejectsVisualizationDumpWithoutCheckpointManifest` | checkpoint reader 拒绝没有版本化 checkpoint manifest 的普通 VTKHDF dump，确保两类文件不能误用。 |
 
 ## 离散算子（`submod/discretization/test/test_operator.cpp`）
 
@@ -271,6 +281,7 @@
 | `FixedStepClockTest.AdvancesTimeFromStepIndex` | 固定时钟满足 $t=k\Delta t$，并在指定步数后结束。 |
 | `FixedStepClockTest.RejectsNonPositiveTimeStep` | 固定时钟拒绝零或负步长。 |
 | `FixedStepClockTest.RejectsAdvanceAfterCompletion` | 已结束的固定时钟不能继续推进。 |
+| `FixedStepClockTest.RestoresInitialStepAndDerivedTime` | 固定时钟可从经校验的 checkpoint step 重建，并继续保持 $t=k\Delta t$。 |
 | `FixedStepPlasmaSimulationTest.AdvanceOneStepEvaluatesReactionAndUpdatesSpecies` | 单步依次完成电场、反应源和固定步长输运更新。 |
 | `FixedStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一步反应率都读取最新密度，而非复用旧值。 |
 | `FixedStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 反应模型读取的是本步泊松求解得到的电场。 |
@@ -295,4 +306,5 @@
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的运行期 metadata 传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential 和 electric-field 七列统计表及单位，不含普通事件、`DETAILS` 或零值异常计数。真实 `VtkHdfWriter` 将 step 0 至终态的全部同步状态写入 `<build>/submod/simulation/output/parallel-plate-400v/parallel-plate-400v.vtkhdf`，测试再用官方 reader 校验时间步数与终态 step。 |
+| `PlasmaSimulation64x64CheckpointTest.ParallelPlate400VCheckpointRestoresAndContinuesSimulation` | 在关闭 dump/trace 的 $0/400\,\mathrm{V}$ 厘米网格固定步仿真中运行 3 步并保存物种密度 checkpoint；新建场、输运器和 simulation，从 manifest step/time 恢复后续跑至第 8 步，最终 density、reaction/source、电势、电荷和全部 face 电场/漂移速度与未中断运行逐项一致。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep` | 使用与上述 \(0/400\,\mathrm{V}\) 厘米网格、电离反应和初始物种完全相同的配置；先以真实 CHOLMOD 完成一个物理时间步，再注入一次底层求解失败，验证 `linalg` 域 diagnostic、可读的 `SolveFailed` 状态与根因消息先于 simulation 失败事件输出。结构化失败 trace 写入当前工作目录的 `test.failure.diag.log`。 |

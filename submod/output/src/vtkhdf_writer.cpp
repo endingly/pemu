@@ -1,6 +1,6 @@
-#include <pemu/output/vtkhdf_writer.hpp>
+#include <pemu/output/dump/vtkhdf_writer.hpp>
 
-#include <pemu/output/mesh_adapter.hpp>
+#include <pemu/output/common/mesh_adapter.hpp>
 #include <pemu/unit/quantity_metadata.hpp>
 
 #include <llnl-units/units.hpp>
@@ -33,7 +33,7 @@
 #include <utility>
 #include <vector>
 
-namespace pemu::output {
+namespace pemu::output::dump {
 
 namespace {
 
@@ -101,11 +101,33 @@ MetadataRow makeMetadataRow(std::string_view association,
   MetadataRow row{.association = std::string{association},
                   .name = metadata.name};
   if (metadata.physical_quantity.has_value()) {
-    row.quantity_kind = std::string{
-        pemu::to_string(metadata.physical_quantity->kind())};
+    row.quantity_kind =
+        std::string{pemu::to_string(metadata.physical_quantity->kind())};
     row.unit = unitName(*metadata.physical_quantity);
   }
   return row;
+}
+
+/**
+ * @brief Resolves output metadata without changing the source field.
+ *
+ * The VTK array name is an output concern, so it is reflected in fallback
+ * metadata.  An explicit selection override instead preserves its semantic
+ * metadata name while supplying its own physical-quantity description.
+ */
+field::FieldMetadata resolveOutputMetadata(
+    const field::FieldMetadata& source_metadata, std::string_view output_name,
+    const FieldMetadata& output_metadata) {
+  auto metadata = source_metadata;
+  if (output_metadata.meta_name.empty()) {
+    metadata.name = std::string{output_name};
+    return metadata;
+  }
+
+  metadata.name = output_metadata.meta_name;
+  metadata.physical_quantity = unit::PhysicalQuantityMetadata{
+      output_metadata.quantity_kind, output_metadata.unit};
+  return metadata;
 }
 
 /** @brief Validates a cell field against its output mesh. */
@@ -243,35 +265,40 @@ void addSchemaMetadata(vtkUnstructuredGrid& grid,
 
 /** @brief Captures one request while preserving its temporal field schema. */
 CapturedSnapshot captureSnapshot(const mesh::IMesh& mesh,
-                                 const FieldDumpRequest& request) {
+                                 const Request& request) {
   CapturedSnapshot captured;
   captured.snapshot.stamp = request.stamp;
   std::unordered_set<std::string> cell_names;
 
   const auto add_cell_field = [&](const field::CellField<double>& values,
+                                  std::string output_name,
                                   field::FieldMetadata metadata) {
     validateField(mesh, values);
-    if (!cell_names.insert(metadata.name).second) {
+    if (output_name.empty()) {
+      throw std::invalid_argument("cell output field name must not be empty");
+    }
+    if (!cell_names.insert(output_name).second) {
       throw std::invalid_argument("duplicate cell field name");
     }
     captured.snapshot.cell_arrays.push_back(
-        captureValues(metadata.name, values.span()));
+        captureValues(std::move(output_name), values.span()));
     captured.schema.push_back(makeMetadataRow("cell", metadata));
   };
 
   for (const auto& field_reference : request.cell_fields) {
     const auto& values = field_reference.get();
-    add_cell_field(values, values.metadata());
+    add_cell_field(values, values.metadata().name, values.metadata());
   }
   for (const auto& selection : request.cell_field_selections) {
     if (selection.field == nullptr) {
       throw std::invalid_argument("cell field selection must not be null");
     }
-    auto metadata = selection.field->metadata();
-    if (!selection.name.empty()) {
-      metadata.name = selection.name;
-    }
-    add_cell_field(*selection.field, std::move(metadata));
+    const std::string output_name = selection.name.empty()
+                                        ? selection.field->metadata().name
+                                        : selection.name;
+    add_cell_field(*selection.field, output_name,
+                   resolveOutputMetadata(selection.field->metadata(),
+                                         output_name, selection.meta_data));
   }
 
   std::unordered_set<std::string> face_names;
@@ -281,26 +308,26 @@ CapturedSnapshot captureSnapshot(const mesh::IMesh& mesh,
     }
     const auto& values = *selection.field;
     validateField(mesh, values);
-    auto metadata = values.metadata();
-    if (!selection.name.empty()) {
-      metadata.name = selection.name;
-    }
-    if (isReservedFieldDataName(metadata.name)) {
+    const std::string output_name =
+        selection.name.empty() ? values.metadata().name : selection.name;
+    const auto metadata = resolveOutputMetadata(values.metadata(), output_name,
+                                                selection.meta_data);
+    if (isReservedFieldDataName(output_name)) {
       throw std::invalid_argument(
           "face field name is reserved by VTKHDF output");
     }
-    if (!face_names.insert(metadata.name).second) {
+    if (!face_names.insert(output_name).second) {
       throw std::invalid_argument("duplicate face field name");
     }
 
     captured.has_face_fields = true;
     captured.snapshot.field_arrays.push_back(
-        captureValues(metadata.name, values.span()));
+        captureValues(output_name, values.span()));
     captured.schema.push_back(makeMetadataRow("face", metadata));
 
     if (selection.include_cell_centered_visualization) {
       const std::string centered_name = selection.cell_centered_name.empty()
-                                            ? metadata.name + "_cell_centered"
+                                            ? output_name + "_cell_centered"
                                             : selection.cell_centered_name;
       if (!cell_names.insert(centered_name).second) {
         throw std::invalid_argument("duplicate cell visualization field name");
@@ -309,7 +336,9 @@ CapturedSnapshot captureSnapshot(const mesh::IMesh& mesh,
           {.name = centered_name,
            .values = makeCellCenteredFaceValues(mesh, values)});
       auto centered_metadata = metadata;
-      centered_metadata.name = centered_name;
+      if (selection.meta_data.meta_name.empty()) {
+        centered_metadata.name = centered_name;
+      }
       captured.schema.push_back(
           makeMetadataRow("cell_visualization", centered_metadata));
     }
@@ -378,13 +407,14 @@ class TemporalUnstructuredGridSource final
     auto* output_info = output_vector->GetInformationObject(0);
     const double requested_time =
         output_info->Has(vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP())
-        ? output_info->Get(vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP())
-        : snapshots_->front().stamp.time;
-    const auto iterator = std::lower_bound(
-        snapshots_->begin(), snapshots_->end(), requested_time,
-        [](const TemporalSnapshot& snapshot, double time) {
-          return snapshot.stamp.time < time;
-        });
+            ? output_info->Get(
+                  vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP())
+            : snapshots_->front().stamp.time;
+    const auto iterator =
+        std::lower_bound(snapshots_->begin(), snapshots_->end(), requested_time,
+                         [](const TemporalSnapshot& snapshot, double time) {
+                           return snapshot.stamp.time < time;
+                         });
     const auto& snapshot =
         iterator == snapshots_->end() ? snapshots_->back() : *iterator;
 
@@ -418,13 +448,13 @@ class TemporalUnstructuredGridSource final
 
 vtkStandardNewMacro(TemporalUnstructuredGridSource);
 
-class VtkHdfOutputSeries final : public IFieldOutputSeries {
+class VtkHdfOutputSeries final : public ISeries {
  public:
   /**
    * @brief Initializes one series and converts its mesh topology exactly once.
    * @param request Series mesh, output path, and overwrite policy.
    */
-  explicit VtkHdfOutputSeries(const FieldSeriesRequest& request)
+  explicit VtkHdfOutputSeries(const SeriesRequest& request)
       : mesh_(request.mesh),
         path_(normalizedOutputPath(request.path)),
         overwrite_(request.overwrite) {
@@ -439,12 +469,11 @@ class VtkHdfOutputSeries final : public IFieldOutputSeries {
     if (!path_.parent_path().empty()) {
       std::filesystem::create_directories(path_.parent_path());
     }
-    topology_ = toVtkUnstructuredGrid(*mesh_);
+    topology_ = common::toVtkUnstructuredGrid(*mesh_);
   }
 
-  /** @copydoc IFieldOutputSeries::append */
-  [[nodiscard]] OutputRecord append(
-      const FieldDumpRequest& request) override {
+  /** @copydoc ISeries::append */
+  [[nodiscard]] OutputRecord append(const Request& request) override {
     if (finished_) {
       throw std::logic_error("cannot append to a finished output series");
     }
@@ -479,7 +508,7 @@ class VtkHdfOutputSeries final : public IFieldOutputSeries {
     return {.path = path_, .stamp = snapshots_.back().stamp};
   }
 
-  /** @copydoc IFieldOutputSeries::finish */
+  /** @copydoc ISeries::finish */
   [[nodiscard]] OutputRecord finish() override {
     if (finished_) {
       throw std::logic_error("output series has already been finished");
@@ -518,9 +547,9 @@ class VtkHdfOutputSeries final : public IFieldOutputSeries {
 
 }  // namespace
 
-std::unique_ptr<IFieldOutputSeries> VtkHdfWriter::openSeries(
-    const FieldSeriesRequest& request) const {
+std::unique_ptr<ISeries> VtkHdfWriter::openSeries(
+    const SeriesRequest& request) const {
   return std::make_unique<VtkHdfOutputSeries>(request);
 }
 
-}  // namespace pemu::output
+}  // namespace pemu::output::dump

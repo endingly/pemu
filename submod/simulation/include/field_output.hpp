@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pemu/output/i_field_output_writer.hpp>
+#include <pemu/output/dump/i_writer.hpp>
 
 #include <cstddef>
 #include <filesystem>
@@ -16,7 +16,7 @@ namespace pemu::simulation {
  * disables all field output without changing the numerical stepping path.
  */
 struct FieldOutputOptions {
-  const output::IFieldOutputWriter* writer{};
+  const output::dump::IWriter* writer{};
   std::filesystem::path directory{"output"};
   std::string file_stem{"plasma"};
   std::size_t every_steps{};

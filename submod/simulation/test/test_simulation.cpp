@@ -9,8 +9,9 @@
 #include <pemu/linalg/cholmod_solver.hpp>
 #include <pemu/linalg/i_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
-#include <pemu/output/i_field_output_writer.hpp>
-#include <pemu/output/vtkhdf_writer.hpp>
+#include <pemu/output/checkpoint/vtkhdf.hpp>
+#include <pemu/output/dump/i_writer.hpp>
+#include <pemu/output/dump/vtkhdf_writer.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_step_plasma_simulation.hpp>
@@ -400,20 +401,19 @@ struct CapturedFieldOutput {
   std::vector<std::string> face_names;
 };
 
-class CapturingFieldOutputSeries final : public output::IFieldOutputSeries {
+class CapturingFieldOutputSeries final : public output::dump::ISeries {
  public:
   /** @brief Creates a capture-only series backed by caller-owned records. */
-  CapturingFieldOutputSeries(
-      std::vector<CapturedFieldOutput>& requests, std::filesystem::path path,
-      std::size_t& finish_count)
+  CapturingFieldOutputSeries(std::vector<CapturedFieldOutput>& requests,
+                             std::filesystem::path path,
+                             std::size_t& finish_count)
       : requests_(&requests),
         path_(std::move(path)),
         finish_count_(&finish_count) {}
 
-  /** @copydoc output::IFieldOutputSeries::append */
+  /** @copydoc output::dump::ISeries::append */
   [[nodiscard]]
-  output::OutputRecord append(
-      const output::FieldDumpRequest& request) override {
+  output::OutputRecord append(const output::dump::Request& request) override {
     CapturedFieldOutput captured{.stamp = request.stamp, .path = request.path};
     for (const auto& selection : request.cell_field_selections) {
       if (selection.field == nullptr) {
@@ -435,7 +435,7 @@ class CapturingFieldOutputSeries final : public output::IFieldOutputSeries {
     return {.path = request.path, .stamp = request.stamp};
   }
 
-  /** @copydoc output::IFieldOutputSeries::finish */
+  /** @copydoc output::dump::ISeries::finish */
   [[nodiscard]] output::OutputRecord finish() override {
     if (requests_->empty()) {
       throw std::logic_error("cannot finish an empty captured series");
@@ -450,13 +450,13 @@ class CapturingFieldOutputSeries final : public output::IFieldOutputSeries {
   std::size_t* finish_count_{};
 };
 
-class CapturingFieldOutputWriter final : public output::IFieldOutputWriter {
+class CapturingFieldOutputWriter final : public output::dump::IWriter {
  public:
-  /** @copydoc output::IFieldOutputWriter::openSeries */
-  [[nodiscard]] std::unique_ptr<output::IFieldOutputSeries> openSeries(
-      const output::FieldSeriesRequest& request) const override {
-    return std::make_unique<CapturingFieldOutputSeries>(
-        requests, request.path, finish_count);
+  /** @copydoc output::dump::IWriter::openSeries */
+  [[nodiscard]] std::unique_ptr<output::dump::ISeries> openSeries(
+      const output::dump::SeriesRequest& request) const override {
+    return std::make_unique<CapturingFieldOutputSeries>(requests, request.path,
+                                                        finish_count);
   }
 
   mutable std::vector<CapturedFieldOutput> requests;
@@ -665,6 +665,13 @@ class AdaptiveStepPlasmaSimulation64x64Test : public ::testing::Test {
   mesh::MoabMesh mesh_;
 };
 
+class PlasmaSimulation64x64CheckpointTest : public ::testing::Test {
+ protected:
+  PlasmaSimulation64x64CheckpointTest() : mesh_(poisson64x64MeshPath()) {}
+
+  mesh::MoabMesh mesh_;
+};
+
 // ============================================================
 // FixedStepClock
 // ============================================================
@@ -712,6 +719,15 @@ TEST(FixedStepClockTest, RejectsAdvanceAfterCompletion) {
   ASSERT_TRUE(clock.finished());
 
   EXPECT_THROW(clock.advance(), std::out_of_range);
+}
+
+TEST(FixedStepClockTest, RestoresInitialStepAndDerivedTime) {
+  const FixedStepClock clock(0.125, 8, 3);
+
+  EXPECT_EQ(clock.step(), 3u);
+  EXPECT_DOUBLE_EQ(clock.time(), 0.375);
+  EXPECT_FALSE(clock.finished());
+  EXPECT_THROW(auto _ = FixedStepClock(0.125, 8, 9), std::invalid_argument);
 }
 
 // ============================================================
@@ -2031,7 +2047,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ASSERT_TRUE(statistics_output.is_open());
   trace::SplitTraceSink trace_sink{trace::OstreamTraceSink{diagnostic_output},
                                    trace::OstreamTraceSink{statistics_output}};
-  output::VtkHdfWriter field_output_writer;
+  output::dump::VtkHdfWriter field_output_writer;
   const auto field_output_directory =
       std::filesystem::path{PEMU_SIMULATION_TEST_OUTPUT_DIR} /
       "parallel-plate-400v";
@@ -2047,8 +2063,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   AdaptiveStepPlasmaSimulation simulation(
       density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
       trace_sink,
-      trace::StatisticsOptions{true, 1, domain_length_cm * cm,
-                               isq::length[cm]},
+      trace::StatisticsOptions{true, 1, domain_length_cm * cm, isq::length[cm]},
       field_output_options);
 
   simulation.run();
@@ -2074,8 +2089,8 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
       field_output_directory / "parallel-plate-400v.vtkhdf";
   ASSERT_TRUE(std::filesystem::is_regular_file(field_output_path));
   vtkNew<vtkHDFReader> field_output_reader;
-  ASSERT_TRUE(field_output_reader->CanReadFile(
-      field_output_path.string().c_str()));
+  ASSERT_TRUE(
+      field_output_reader->CanReadFile(field_output_path.string().c_str()));
   field_output_reader->SetFileName(field_output_path.string().c_str());
   field_output_reader->Update();
   EXPECT_EQ(field_output_reader->GetNumberOfSteps(),
@@ -2147,6 +2162,182 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   EXPECT_EQ(statistics_text.find("DETAILS"), std::string::npos);
   EXPECT_EQ(statistics_text.find("non_finite=0"), std::string::npos);
   EXPECT_EQ(statistics_text.find("negative=0"), std::string::npos);
+}
+
+TEST_F(PlasmaSimulation64x64CheckpointTest,
+       ParallelPlate400VCheckpointRestoresAndContinuesSimulation) {
+  using namespace mp_units;
+  using namespace mp_units::si::unit_symbols;
+
+  constexpr auto number_density_unit = one / cubic(cm);
+  constexpr auto mobility_unit = square(cm) / (V * s);
+  constexpr auto diffusivity_unit = square(cm) / s;
+  constexpr auto ionization_coefficient_unit = cubic(cm) / s;
+  constexpr auto elementary_charge = 1.602176634e-19 * C;
+  constexpr auto vacuum_permittivity = 8.8541878128e-14 * F / cm;
+  constexpr auto initial_density = 1.0e6 * number_density_unit;
+  constexpr auto electron_mobility = 1.0e3 * mobility_unit;
+  constexpr auto ion_mobility = 1.5 * mobility_unit;
+  constexpr auto electron_diffusivity = 1.0e2 * diffusivity_unit;
+  constexpr auto ion_diffusivity = 4.0e-2 * diffusivity_unit;
+  constexpr auto neutral_density = 2.5e19 * number_density_unit;
+  constexpr auto ionization_rate_coefficient =
+      1.0e-13 * ionization_coefficient_unit;
+  constexpr auto fixed_time_step = 1.0e-8 * s;
+  constexpr std::size_t checkpoint_step = 3;
+  constexpr std::size_t total_steps = 8;
+
+  constexpr double left_voltage = 0.0;
+  constexpr double right_voltage = 400.0;
+  constexpr double elementary_charge_coulomb =
+      elementary_charge.numerical_value_in(C);
+  constexpr double initial_density_cm3 =
+      initial_density.numerical_value_in(number_density_unit);
+  constexpr double dt = fixed_time_step.numerical_value_in(s);
+  const auto field_metadata = field::centimetrePlasmaFieldMetadata();
+
+  physics::SpeciesSet species;
+  const auto electron = species.add(
+      {.name = "e",
+       .charge = -elementary_charge_coulomb,
+       .mobility = electron_mobility.numerical_value_in(mobility_unit),
+       .diffusivity = electron_diffusivity.numerical_value_in(diffusivity_unit),
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+  const auto ion = species.add(
+      {.name = "Ar+",
+       .charge = elementary_charge_coulomb,
+       .mobility = ion_mobility.numerical_value_in(mobility_unit),
+       .diffusivity = ion_diffusivity.numerical_value_in(diffusivity_unit),
+       .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
+
+  physics::ReactionNetwork reactions(species);
+  const auto ionization =
+      reactions.addReaction({.name = "electron-impact ionization",
+                             .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
+  const ElectronImpactIonizationEvaluator evaluator{
+      .electron = electron,
+      .ionization = ionization,
+      .neutral_density =
+          neutral_density.numerical_value_in(number_density_unit),
+      .rate_coefficient = ionization_rate_coefficient.numerical_value_in(
+          ionization_coefficient_unit)};
+
+  physics::SpeciesCellFields uninterrupted_density(
+      mesh_, species.size(), initial_density_cm3,
+      field_metadata.number_density);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper uninterrupted_transport(
+      mesh_, species, vacuum_permittivity.numerical_value_in(F / cm), dt,
+      makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
+      makeConstantSpeciesBoundaryConditions(species.size(),
+                                            initial_density_cm3),
+      std::make_unique<linalg::CholmodSolver>(), field_metadata);
+  FixedStepPlasmaSimulation uninterrupted(uninterrupted_density, reactions,
+                                          uninterrupted_transport, evaluator,
+                                          FixedStepClock(dt, total_steps));
+  uninterrupted.run();
+
+  physics::SpeciesCellFields interrupted_density(mesh_, species.size(),
+                                                 initial_density_cm3,
+                                                 field_metadata.number_density);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper interrupted_transport(
+      mesh_, species, vacuum_permittivity.numerical_value_in(F / cm), dt,
+      makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
+      makeConstantSpeciesBoundaryConditions(species.size(),
+                                            initial_density_cm3),
+      std::make_unique<linalg::CholmodSolver>(), field_metadata);
+  FixedStepPlasmaSimulation interrupted(interrupted_density, reactions,
+                                        interrupted_transport, evaluator,
+                                        FixedStepClock(dt, total_steps));
+  for (std::size_t step = 0; step < checkpoint_step; ++step) {
+    ASSERT_TRUE(interrupted.advanceOneStep().success());
+  }
+  ASSERT_EQ(interrupted.step(), checkpoint_step);
+
+  const std::array checkpoint_sources{
+      output::checkpoint::CellFieldSource{
+          .field = &interrupted_density[electron],
+          .key = "species_0_e_number_density"},
+      output::checkpoint::CellFieldSource{
+          .field = &interrupted_density[ion],
+          .key = "species_1_Ar_plus_number_density"},
+  };
+  const auto checkpoint_path =
+      std::filesystem::path{PEMU_SIMULATION_TEST_OUTPUT_DIR} /
+      "parallel-plate-400v-checkpoint" / "state.vtkhdf";
+  const output::checkpoint::VtkHdfWriter checkpoint_writer;
+  const auto checkpoint_record = checkpoint_writer.write(
+      {.mesh = &mesh_,
+       .path = checkpoint_path,
+       .stamp = {.step = static_cast<std::uint64_t>(interrupted.step()),
+                 .time = interrupted.time()},
+       .cell_fields = checkpoint_sources,
+       .overwrite = true});
+  ASSERT_TRUE(std::filesystem::is_regular_file(checkpoint_record.path));
+
+  physics::SpeciesCellFields restored_density(mesh_, species.size(), 0.0,
+                                              field_metadata.number_density);
+  const std::array checkpoint_targets{
+      output::checkpoint::CellFieldTarget{.field = &restored_density[electron],
+                                          .key = "species_0_e_number_density"},
+      output::checkpoint::CellFieldTarget{
+          .field = &restored_density[ion],
+          .key = "species_1_Ar_plus_number_density"},
+  };
+  const output::checkpoint::VtkHdfReader checkpoint_reader;
+  const auto restored_record = checkpoint_reader.restore(
+      checkpoint_record.path,
+      {.mesh = &mesh_, .cell_fields = checkpoint_targets});
+  ASSERT_EQ(restored_record.stamp.step, checkpoint_step);
+  ASSERT_DOUBLE_EQ(restored_record.stamp.time,
+                   static_cast<double>(checkpoint_step) * dt);
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_DOUBLE_EQ(restored_density[electron][cell],
+                     interrupted_density[electron][cell]);
+    EXPECT_DOUBLE_EQ(restored_density[ion][cell],
+                     interrupted_density[ion][cell]);
+  }
+
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper restored_transport(
+      mesh_, species, vacuum_permittivity.numerical_value_in(F / cm), dt,
+      makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
+      makeConstantSpeciesBoundaryConditions(species.size(),
+                                            initial_density_cm3),
+      std::make_unique<linalg::CholmodSolver>(), field_metadata);
+  FixedStepPlasmaSimulation restored(
+      restored_density, reactions, restored_transport, evaluator,
+      FixedStepClock(dt, total_steps,
+                     static_cast<std::size_t>(restored_record.stamp.step)));
+  ASSERT_DOUBLE_EQ(restored.time(), restored_record.stamp.time);
+  restored.run();
+
+  ASSERT_TRUE(uninterrupted.finished());
+  ASSERT_TRUE(restored.finished());
+  ASSERT_EQ(restored.step(), uninterrupted.step());
+  ASSERT_DOUBLE_EQ(restored.time(), uninterrupted.time());
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_DOUBLE_EQ(restored_density[electron][cell],
+                     uninterrupted_density[electron][cell]);
+    EXPECT_DOUBLE_EQ(restored_density[ion][cell],
+                     uninterrupted_density[ion][cell]);
+    EXPECT_DOUBLE_EQ(restored.reactionRates()[ionization][cell],
+                     uninterrupted.reactionRates()[ionization][cell]);
+    EXPECT_DOUBLE_EQ(restored.source()[electron][cell],
+                     uninterrupted.source()[electron][cell]);
+    EXPECT_DOUBLE_EQ(restored.source()[ion][cell],
+                     uninterrupted.source()[ion][cell]);
+    EXPECT_DOUBLE_EQ(restored.chargeDensity()[cell],
+                     uninterrupted.chargeDensity()[cell]);
+    EXPECT_DOUBLE_EQ(restored.potential()[cell],
+                     uninterrupted.potential()[cell]);
+  }
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+    EXPECT_DOUBLE_EQ(restored.electricFieldNormal()[face],
+                     uninterrupted.electricFieldNormal()[face]);
+    EXPECT_DOUBLE_EQ(restored.driftVelocityNormal(electron)[face],
+                     uninterrupted.driftVelocityNormal(electron)[face]);
+    EXPECT_DOUBLE_EQ(restored.driftVelocityNormal(ion)[face],
+                     uninterrupted.driftVelocityNormal(ion)[face]);
+  }
 }
 
 TEST_F(AdaptiveStepPlasmaSimulation64x64Test,

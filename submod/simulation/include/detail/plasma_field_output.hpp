@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pemu/output/output_types.hpp>
+#include <pemu/output/dump/types.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/field_output.hpp>
 
@@ -69,16 +69,16 @@ template <typename Stepper>
 [[nodiscard]]
 output::OutputRecord writePlasmaFieldSnapshot(
     const physics::SpeciesCellFields& density, const Stepper& stepper,
-    const FieldOutputOptions& options, output::IFieldOutputSeries& series,
+    const FieldOutputOptions& options, output::dump::ISeries& series,
     output::OutputStamp stamp) {
   if (!options.enabled()) {
     throw std::logic_error(
         "cannot write a snapshot with field output disabled");
   }
 
-  std::vector<output::CellFieldSelection> cell_fields;
+  std::vector<output::dump::CellFieldSelection> cell_fields;
   cell_fields.reserve(density.size() + 2);
-  std::vector<output::FaceFieldSelection> face_fields;
+  std::vector<output::dump::FaceFieldSelection> face_fields;
   face_fields.reserve(density.size() + 1);
 
   for (std::size_t index = 0; index < density.size(); ++index) {
@@ -113,8 +113,9 @@ output::OutputRecord writePlasmaFieldSnapshot(
        .path = plasmaFieldOutputPath(options),
        .stamp = stamp,
        .cell_field_selections =
-           std::span<const output::CellFieldSelection>{cell_fields},
-       .face_fields = std::span<const output::FaceFieldSelection>{face_fields},
+           std::span<const output::dump::CellFieldSelection>{cell_fields},
+       .face_fields =
+           std::span<const output::dump::FaceFieldSelection>{face_fields},
        .overwrite = options.overwrite});
 }
 

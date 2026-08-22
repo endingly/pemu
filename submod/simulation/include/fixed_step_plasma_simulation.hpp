@@ -1,7 +1,7 @@
 #pragma once
 
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
-#include <pemu/output/output_trace.hpp>
+#include <pemu/output/dump/trace.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/detail/plasma_field_output.hpp>
@@ -470,7 +470,7 @@ class FixedStepPlasmaSimulation {
     if (terminal && field_output_has_snapshots_) {
       const auto record = field_output_series_->finish();
       if constexpr (tracing_enabled_) {
-        output::traceOutputCompleted(trace_sink_, record);
+        output::dump::traceCompleted(trace_sink_, record);
       }
     }
   }
@@ -555,7 +555,7 @@ class FixedStepPlasmaSimulation {
 
   FieldOutputOptions field_output_options_;
 
-  std::unique_ptr<output::IFieldOutputSeries> field_output_series_;
+  std::unique_ptr<output::dump::ISeries> field_output_series_;
 
   bool field_output_has_snapshots_{};
 

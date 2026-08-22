@@ -1,4 +1,4 @@
-#include <pemu/output/mesh_adapter.hpp>
+#include <pemu/output/common/mesh_adapter.hpp>
 
 #include <vtkCellType.h>
 #include <vtkIdList.h>
@@ -9,7 +9,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace pemu::output {
+namespace pemu::output::common {
 
 vtkSmartPointer<vtkUnstructuredGrid> toVtkUnstructuredGrid(
     const mesh::IMesh& mesh) {
@@ -54,4 +54,4 @@ vtkSmartPointer<vtkUnstructuredGrid> toVtkUnstructuredGrid(
   return grid;
 }
 
-}  // namespace pemu::output
+}  // namespace pemu::output::common
