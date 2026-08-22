@@ -7,10 +7,14 @@ namespace pemu::simulation {
 
 class FixedStepClock {
  public:
-  FixedStepClock(double dt, std::size_t total_steps)
-      : dt_(dt), total_steps_(total_steps) {
+  FixedStepClock(double dt, std::size_t total_steps,
+                 std::size_t initial_step = 0)
+      : dt_(dt), step_(initial_step), total_steps_(total_steps) {
     if (dt <= 0.0) {
       throw std::invalid_argument("time step must be positive");
+    }
+    if (initial_step > total_steps) {
+      throw std::invalid_argument("initial step must not exceed total steps");
     }
   }
 
@@ -55,7 +59,7 @@ class FixedStepClock {
  private:
   double dt_;
 
-  std::size_t step_{0};
+  std::size_t step_;
   std::size_t total_steps_;
 };
 

@@ -1,8 +1,14 @@
-# VTKHDF 场输出
+# Output：dump 与 checkpoint
 
-`submod/output` 是独立于 `trace` 的持久化模块。第一阶段只实现面向 ParaView 的
-VTKHDF field dump；`trace` 不保存网格或场数据，只在写入成功后同步接收一个
-`output.completed` 事件及 `path`、`step`、`time` 三个属性。
+`submod/output` 是独立于 `trace` 的持久化模块，公共接口按用途分层：
+
+- `pemu/output/common`：dump/checkpoint 共用的 stamp、record 与 mesh→VTK adapter；
+- `pemu/output/dump` 与 `pemu::output::dump`：面向 ParaView 的时序场输出；
+- `pemu/output/checkpoint` 与 `pemu::output::checkpoint`：可校验、可恢复的状态快照。
+
+旧的顶层 output 头文件已经移除，所有调用方均使用上述分层入口。`trace` 不保存网格或
+场数据；dump 写入成功后仍只同步接收 `output.completed` 及 `path`、`step`、`time`
+三个属性。
 
 ## 数据映射
 
@@ -12,7 +18,7 @@ points 与 polygon cells。当前 MOAB 后端仍只接受平面二维 polygon me
 
 | pemu 数据 | VTKHDF 位置 | 语义 |
 | --- | --- | --- |
-| `CellField<double>` | `CellData` | 数组名取自 `FieldMetadata::name`。 |
+| `CellField<double>` | `CellData` | 默认数组名取自 `FieldMetadata::name`，selection 可覆盖。 |
 | `FaceField<double>` 原始值 | `FieldData` | 保持稠密 `FaceId` 顺序，不伪装成 `CellData`。 |
 | face owner/neighbor/center/area/boundary | `FieldData` | 使原始 face 数组保持可解释、可重建的数据关联。 |
 | 可选 face 可视化副本 | `CellData` | 对每个 cell 的相邻 face 做面积加权平均，并使用独立数组名。 |
@@ -26,10 +32,11 @@ points 与 polygon cells。当前 MOAB 后端仍只接受平面二维 polygon me
 - `pemu_field_unit`
 
 官方 writer 会按 VTKHDF 规范替换数据数组名中的 `.` 与 `/`；metadata 的 name 列
-始终保存未修改的原始 field name，因此语义名称不会丢失。
+保存未修改的输出语义名称（selection 提供 `meta_data` 时为 `meta_name`），因此语义名称
+不会丢失。
 
 `pemu_step` 与 `pemu_time` 位于每个时间步的 `FieldData`，time 还写入 VTK 的标准
-`DATA_TIME_STEP` information。`IFieldOutputWriter::openSeries` 建立一次输出会话，按
+`DATA_TIME_STEP` information。`output::dump::IWriter::openSeries` 建立一次输出会话，按
 step/time 递增地 `append` 快照，最后 `finish` 成一个 `.vtkhdf`/`.hdf` 时间序列文件。
 单快照 `write` 是上述 series 生命周期的便利封装。
 
@@ -37,7 +44,7 @@ step/time 递增地 `append` 快照，最后 `finish` 成一个 `.vtkhdf`/`.hdf`
 
 `FixedStepPlasmaSimulation` 与 `AdaptiveStepPlasmaSimulation` 通过构造参数
 `simulation::FieldOutputOptions` 启用输出。配置持有一个非拥有的
-`IFieldOutputWriter`，writer 必须比 simulation 活得更久；默认的空 writer 指针保持
+`output::dump::IWriter`，writer 必须比 simulation 活得更久；默认的空 writer 指针保持
 输出关闭，因此不会改变既有数值推进或产生文件。
 
 启用后，simulation 会在电势、电场与当前密度同步的时刻采集：可选初始状态、每
@@ -47,7 +54,7 @@ step/time 递增地 `append` 快照，最后 `finish` 成一个 `.vtkhdf`/`.hdf`
 `plasma`。若同一路径已存在，仍由 writer 的 `overwrite` 选项决定是否允许覆盖。
 
 ```cpp
-pemu::output::VtkHdfWriter writer;
+pemu::output::dump::VtkHdfWriter writer;
 pemu::simulation::FieldOutputOptions output_options{
     .writer = &writer,
     .directory = "results",
@@ -92,12 +99,54 @@ writer 额外产生一个 cell-centered `CellData` 数组；这个数组明确�
 数值数组，也不改变字段本身的物理量 metadata。这让 simulation 能为同质的物种字段
 提供唯一文件名，同时保留其单位和 quantity kind。
 
-## Checkpoint 边界
+如需为某个输出数组声明不同于源字段的语义，可在 selection 的 `meta_data` 中提供非空
+`meta_name`、`quantity_kind` 和 `unit`。writer 会将它们写入 `pemu_field_*` metadata
+数组，而不会修改源字段或该数组的 VTK 名称；空 `meta_name` 保持源字段 metadata 的既有
+行为。
 
-`IFieldOutputWriter` 与模板接口 `ICheckpointWriter<State>` 相互独立。当前没有任何
-checkpoint writer 或 restart reader 实现，也不把 VTKHDF 可视化文件声明为
-checkpoint。后续确定完整 simulation state 与一致性协议后，可在不改变 field dump
-接口的前提下实现 checkpoint/restart。
+## VTKHDF checkpoint
+
+checkpoint 使用 VTKHDF，而不是直接调用 HDF5 C API。纯 HDF5 只定义容器，仍需项目自行
+发明 group/dataset 协议；VTKHDF 已提供稳定的网格与数据关联结构，并且当前依赖和
+round-trip 路径已经覆盖它。checkpoint 与 dump 虽共享容器和 mesh adapter，但 API、
+manifest 和语义互不替代：普通 dump 文件没有 checkpoint marker，reader 会拒绝恢复。
+
+`output::checkpoint::VtkHdfWriter` 将以下内容写入单快照 `.vtkhdf`/`.hdf`：
+
+- `pemu.vtkhdf.checkpoint` marker、格式版本、step/time；
+- 完整 points/cells，以及按 FaceId 排列的 owner、neighbor、center、area、normal 和
+  boundary id 校验数组；
+- 所选 CellField/FaceField 的原始 double 值；
+- association、稳定 key、原字段 metadata name、quantity kind、unit 与值数量。
+
+VTKHDF 会改写数组名中的 `.` 和 `/`，所以 checkpoint key 明确禁止这两个字符，避免恢复
+时出现名称歧义。`VtkHdfReader::inspect` 可只读取并验证 manifest；`restore` 在写入任何
+目标字段之前统一校验格式版本、完整 mesh/FaceId 顺序、key、尺寸和物理 metadata。默认
+要求调用方提供所有已保存字段，因此恢复要么全部成功，要么保持目标状态不变。
+
+```cpp
+using namespace pemu::output::checkpoint;
+
+VtkHdfWriter writer;
+writer.write({
+    .mesh = &mesh,
+    .path = "state.vtkhdf",
+    .stamp = {.step = step, .time = time},
+    .cell_fields = cell_sources,
+    .face_fields = face_sources,
+});
+
+VtkHdfReader reader;
+const auto manifest = reader.inspect("state.vtkhdf");
+reader.restore("state.vtkhdf", {
+    .mesh = &mesh,
+    .cell_fields = cell_targets,
+    .face_fields = face_targets,
+});
+```
+
+checkpoint 保存由调用方明确选择的数值状态；外部配置、reaction network、边界条件和求解器
+实例仍由应用构造。恢复后的 `manifest.stamp` 用于重建相应的 simulation clock。
 
 ## 可读性验证
 

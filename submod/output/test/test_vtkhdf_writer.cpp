@@ -3,9 +3,8 @@
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
-#include <pemu/output/i_checkpoint_writer.hpp>
-#include <pemu/output/mesh_adapter.hpp>
-#include <pemu/output/vtkhdf_writer.hpp>
+#include <pemu/output/common/mesh_adapter.hpp>
+#include <pemu/output/dump/vtkhdf_writer.hpp>
 #include <pemu/unit/quantity_metadata.hpp>
 
 #include <llnl-units/units.hpp>
@@ -28,7 +27,7 @@
 #include <system_error>
 #include <type_traits>
 
-namespace pemu::output::test {
+namespace pemu::output::dump::test {
 
 namespace {
 
@@ -163,13 +162,11 @@ class CapturingSink {
 };
 
 static_assert(trace::TraceSink<CapturingSink>);
-static_assert(std::has_virtual_destructor_v<ICheckpointWriter<CapturedEvent>>);
-
 }  // namespace
 
 TEST(MeshAdapterTest, ConvertsIMeshToPolygonalUnstructuredGrid) {
   const mesh::MoabMesh mesh(testMeshPath().string());
-  const auto grid = toVtkUnstructuredGrid(mesh);
+  const auto grid = common::toVtkUnstructuredGrid(mesh);
 
   ASSERT_NE(grid, nullptr);
   EXPECT_EQ(grid->GetNumberOfPoints(), 6);
@@ -285,8 +282,8 @@ TEST(ParaViewReadabilityTest,
   const auto path = temporary.path() / "temporal.vtkhdf";
 
   const VtkHdfWriter writer;
-  auto series = writer.openSeries(
-      {.mesh = &mesh, .path = path, .overwrite = false});
+  auto series =
+      writer.openSeries({.mesh = &mesh, .path = path, .overwrite = false});
   potential[0] = 10.0;
   potential[1] = 20.0;
   (void)series->append({.mesh = &mesh,
@@ -317,7 +314,8 @@ TEST(ParaViewReadabilityTest,
 
   reader->SetStep(0);
   reader->Update();
-  auto* first = vtkUnstructuredGrid::SafeDownCast(reader->GetOutputDataObject(0));
+  auto* first =
+      vtkUnstructuredGrid::SafeDownCast(reader->GetOutputDataObject(0));
   ASSERT_NE(first, nullptr);
   ASSERT_NE(first->GetCellData()->GetArray("potential"), nullptr);
   EXPECT_DOUBLE_EQ(first->GetCellData()->GetArray("potential")->GetTuple1(0),
@@ -328,7 +326,8 @@ TEST(ParaViewReadabilityTest,
 
   reader->SetStep(1);
   reader->Update();
-  auto* last = vtkUnstructuredGrid::SafeDownCast(reader->GetOutputDataObject(0));
+  auto* last =
+      vtkUnstructuredGrid::SafeDownCast(reader->GetOutputDataObject(0));
   ASSERT_NE(last, nullptr);
   ASSERT_NE(last->GetCellData()->GetArray("potential"), nullptr);
   EXPECT_DOUBLE_EQ(last->GetCellData()->GetArray("potential")->GetTuple1(0),
@@ -386,6 +385,31 @@ TEST(VtkHdfWriterTest, UsesCellFieldSelectionNameWithoutChangingMetadata) {
                              "species_0_potential", "electric_potential", "V"));
 }
 
+TEST(VtkHdfWriterTest, WritesExplicitSelectionMetadata) {
+  const mesh::MoabMesh mesh(testMeshPath().string());
+  field::CellField<double> potential(mesh, 3.0, potentialMetadata());
+  const std::array selections{CellFieldSelection{
+      .field = &potential,
+      .name = "species_0_potential",
+      .meta_data = {.meta_name = "species potential",
+                    .quantity_kind =
+                        unit::QuantityKind::electric_potential_difference,
+                    .unit = units::precise::electrical::kV},
+  }};
+  TemporaryDirectory temporary;
+  const auto path = temporary.path() / "selection-metadata.vtkhdf";
+
+  const VtkHdfWriter writer;
+  (void)writer.write(
+      {.mesh = &mesh, .path = path, .cell_field_selections = selections});
+
+  const auto grid = readGrid(path);
+  ASSERT_NE(grid, nullptr);
+  EXPECT_NE(grid->GetCellData()->GetArray("species_0_potential"), nullptr);
+  EXPECT_TRUE(hasMetadataRow(*grid->GetFieldData(), "cell", "species potential",
+                             "electric_potential_difference", "kV"));
+}
+
 TEST(VtkHdfWriterTest, RefusesOverwriteUnlessExplicitlyEnabled) {
   const mesh::MoabMesh mesh(testMeshPath().string());
   field::CellField<double> potential(mesh, 3.0, potentialMetadata());
@@ -408,4 +432,4 @@ TEST(VtkHdfWriterTest, RefusesOverwriteUnlessExplicitlyEnabled) {
                                          .overwrite = true}));
 }
 
-}  // namespace pemu::output::test
+}  // namespace pemu::output::dump::test
