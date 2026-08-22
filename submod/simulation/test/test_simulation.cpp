@@ -9,6 +9,8 @@
 #include <pemu/linalg/cholmod_solver.hpp>
 #include <pemu/linalg/i_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
+#include <pemu/output/i_field_output_writer.hpp>
+#include <pemu/output/vtkhdf_writer.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_step_plasma_simulation.hpp>
@@ -20,6 +22,11 @@
 #include <pemu/trace/trace.hpp>
 
 #include <mp-units/systems/si.h>
+
+#include <vtkFieldData.h>
+#include <vtkHDFReader.h>
+#include <vtkNew.h>
+#include <vtkUnstructuredGrid.h>
 
 #include <algorithm>
 #include <cmath>
@@ -385,6 +392,76 @@ struct RecordingTraceSink {
 };
 
 static_assert(pemu::trace::TraceSink<RecordingTraceSink>);
+
+struct CapturedFieldOutput {
+  output::OutputStamp stamp;
+  std::filesystem::path path;
+  std::vector<std::string> cell_names;
+  std::vector<std::string> face_names;
+};
+
+class CapturingFieldOutputSeries final : public output::IFieldOutputSeries {
+ public:
+  /** @brief Creates a capture-only series backed by caller-owned records. */
+  CapturingFieldOutputSeries(
+      std::vector<CapturedFieldOutput>& requests, std::filesystem::path path,
+      std::size_t& finish_count)
+      : requests_(&requests),
+        path_(std::move(path)),
+        finish_count_(&finish_count) {}
+
+  /** @copydoc output::IFieldOutputSeries::append */
+  [[nodiscard]]
+  output::OutputRecord append(
+      const output::FieldDumpRequest& request) override {
+    CapturedFieldOutput captured{.stamp = request.stamp, .path = request.path};
+    for (const auto& selection : request.cell_field_selections) {
+      if (selection.field == nullptr) {
+        throw std::invalid_argument("captured cell field must not be null");
+      }
+      captured.cell_names.push_back(selection.name.empty()
+                                        ? selection.field->metadata().name
+                                        : selection.name);
+    }
+    for (const auto& selection : request.face_fields) {
+      if (selection.field == nullptr) {
+        throw std::invalid_argument("captured face field must not be null");
+      }
+      captured.face_names.push_back(selection.name.empty()
+                                        ? selection.field->metadata().name
+                                        : selection.name);
+    }
+    requests_->push_back(std::move(captured));
+    return {.path = request.path, .stamp = request.stamp};
+  }
+
+  /** @copydoc output::IFieldOutputSeries::finish */
+  [[nodiscard]] output::OutputRecord finish() override {
+    if (requests_->empty()) {
+      throw std::logic_error("cannot finish an empty captured series");
+    }
+    ++*finish_count_;
+    return {.path = path_, .stamp = requests_->back().stamp};
+  }
+
+ private:
+  std::vector<CapturedFieldOutput>* requests_{};
+  std::filesystem::path path_;
+  std::size_t* finish_count_{};
+};
+
+class CapturingFieldOutputWriter final : public output::IFieldOutputWriter {
+ public:
+  /** @copydoc output::IFieldOutputWriter::openSeries */
+  [[nodiscard]] std::unique_ptr<output::IFieldOutputSeries> openSeries(
+      const output::FieldSeriesRequest& request) const override {
+    return std::make_unique<CapturingFieldOutputSeries>(
+        requests, request.path, finish_count);
+  }
+
+  mutable std::vector<CapturedFieldOutput> requests;
+  mutable std::size_t finish_count{};
+};
 
 // ============================================================
 // Counting linear-solver backend.
@@ -1083,6 +1160,69 @@ TEST_F(FixedStepPlasmaSimulationTest,
 }
 
 TEST_F(FixedStepPlasmaSimulationTest,
+       WritesInitialPeriodicAndFinalFieldSnapshots) {
+  constexpr double dt = 0.01;
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+
+  CapturingFieldOutputWriter writer;
+  std::vector<std::string> names;
+  std::vector<std::string> categories;
+  std::vector<pemu::trace::DiagDomain> domains;
+  std::vector<pemu::trace::EventKind> kinds;
+  std::vector<double> selected_time_steps;
+  std::vector<double> completed_times;
+  const RecordingTraceSink sink{.names = &names,
+                                .categories = &categories,
+                                .domains = &domains,
+                                .kinds = &kinds,
+                                .selected_time_steps = &selected_time_steps,
+                                .completed_times = &completed_times};
+  const FieldOutputOptions output_options{
+      .writer = &writer,
+      .directory = "simulation-output",
+      .file_stem = "snapshot",
+      .every_steps = 1,
+      .write_initial = true,
+      .write_final = true,
+  };
+  FixedStepPlasmaSimulation simulation(
+      density, reactions, transport, NoReactionEvaluator{},
+      FixedStepClock(dt, 2), sink, {}, output_options);
+
+  simulation.run();
+
+  ASSERT_EQ(writer.requests.size(), 3u);
+  for (std::size_t index = 0; index < writer.requests.size(); ++index) {
+    const auto& request = writer.requests[index];
+    EXPECT_EQ(request.stamp.step, index);
+    EXPECT_NEAR(request.stamp.time, dt * static_cast<double>(index), 1e-14);
+    EXPECT_EQ(request.path,
+              std::filesystem::path{"simulation-output"} / "snapshot.vtkhdf");
+    EXPECT_EQ(request.cell_names,
+              (std::vector<std::string>{
+                  "species_0_e_number_density", "species_1_Ar+_number_density",
+                  "charge_density", "electric_potential"}));
+    EXPECT_EQ(request.face_names,
+              (std::vector<std::string>{"species_0_e_normal_drift_velocity",
+                                        "species_1_Ar+_normal_drift_velocity",
+                                        "normal_electric_field"}));
+  }
+
+  EXPECT_EQ(std::count(domains.begin(), domains.end(),
+                       pemu::trace::DiagDomain::output),
+            1);
+  EXPECT_EQ(std::count(names.begin(), names.end(), "completed"), 1);
+  EXPECT_EQ(writer.finish_count, 1u);
+}
+
+TEST_F(FixedStepPlasmaSimulationTest,
        EmitsReturnedDiagnosticBeforeStepFailureTrace) {
   constexpr double dt = 0.01;
   physics::SpeciesSet species;
@@ -1347,6 +1487,43 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
     EXPECT_NEAR(density[ids.electron][cell], 1.0, 1e-12);
     EXPECT_NEAR(density[ids.ion][cell], 1.0, 1e-12);
   }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       WritesScheduledSnapshotsAtAdaptiveStateTimes) {
+  physics::SpeciesSet species;
+  (void)addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0});
+
+  CapturingFieldOutputWriter writer;
+  const FieldOutputOptions output_options{
+      .writer = &writer,
+      .directory = "adaptive-output",
+      .file_stem = "snapshot",
+      .every_steps = 2,
+      .write_initial = true,
+      .write_final = true,
+  };
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport, NoReactionEvaluator{},
+      AdaptiveTimeClock(0.1), {}, {}, output_options);
+
+  simulation.run();
+
+  ASSERT_EQ(writer.requests.size(), 3u);
+  EXPECT_EQ(writer.requests[0].stamp.step, 0u);
+  EXPECT_NEAR(writer.requests[0].stamp.time, 0.0, 1e-14);
+  EXPECT_EQ(writer.requests[1].stamp.step, 2u);
+  EXPECT_NEAR(writer.requests[1].stamp.time, 0.08, 1e-14);
+  EXPECT_EQ(writer.requests[2].stamp.step, 3u);
+  EXPECT_NEAR(writer.requests[2].stamp.time, 0.1, 1e-14);
+  EXPECT_EQ(writer.finish_count, 1u);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulationTest,
@@ -1755,7 +1932,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   constexpr auto neutral_density = 2.5e19 * number_density_unit;
   constexpr auto ionization_rate_coefficient =
       1.0e-13 * ionization_coefficient_unit;
-  constexpr auto end_time = 2.0e-7 * s;
+  constexpr auto end_time = 1.0e-6 * s;
   constexpr auto maximum_time_step = 1.0e-6 * s;
 
   constexpr double domain_length_cm = domain_length.numerical_value_in(cm);
@@ -1854,11 +2031,25 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ASSERT_TRUE(statistics_output.is_open());
   trace::SplitTraceSink trace_sink{trace::OstreamTraceSink{diagnostic_output},
                                    trace::OstreamTraceSink{statistics_output}};
+  output::VtkHdfWriter field_output_writer;
+  const auto field_output_directory =
+      std::filesystem::path{PEMU_SIMULATION_TEST_OUTPUT_DIR} /
+      "parallel-plate-400v";
+  const FieldOutputOptions field_output_options{
+      .writer = &field_output_writer,
+      .directory = field_output_directory,
+      .file_stem = "parallel-plate-400v",
+      .every_steps = 1,
+      .write_initial = true,
+      .write_final = true,
+      .overwrite = true,
+  };
   AdaptiveStepPlasmaSimulation simulation(
       density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
       trace_sink,
       trace::StatisticsOptions{true, 1, domain_length_cm * cm,
-                               isq::length[cm]});
+                               isq::length[cm]},
+      field_output_options);
 
   simulation.run();
 
@@ -1879,6 +2070,26 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   EXPECT_NEAR(simulation.time(), end_time_s, 1.0e-18);
   EXPECT_GT(simulation.step(), 1u);
   EXPECT_LT(simulation.lastTimeStep(), max_time_step_s);
+  const auto field_output_path =
+      field_output_directory / "parallel-plate-400v.vtkhdf";
+  ASSERT_TRUE(std::filesystem::is_regular_file(field_output_path));
+  vtkNew<vtkHDFReader> field_output_reader;
+  ASSERT_TRUE(field_output_reader->CanReadFile(
+      field_output_path.string().c_str()));
+  field_output_reader->SetFileName(field_output_path.string().c_str());
+  field_output_reader->Update();
+  EXPECT_EQ(field_output_reader->GetNumberOfSteps(),
+            static_cast<int>(simulation.step() + 1));
+  field_output_reader->SetStep(static_cast<int>(simulation.step()));
+  field_output_reader->Update();
+  auto* final_output_grid = vtkUnstructuredGrid::SafeDownCast(
+      field_output_reader->GetOutputDataObject(0));
+  ASSERT_NE(final_output_grid, nullptr);
+  auto* final_output_step =
+      final_output_grid->GetFieldData()->GetArray("pemu_step");
+  ASSERT_NE(final_output_step, nullptr);
+  EXPECT_EQ(static_cast<std::uint64_t>(final_output_step->GetTuple1(0)),
+            simulation.step());
 
   EXPECT_GT(integratedDensity(mesh_, density[electron]),
             initial_integrated_density);

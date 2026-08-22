@@ -97,7 +97,9 @@
 | --- | --- |
 | `MeshAdapterTest.ConvertsIMeshToPolygonalUnstructuredGrid` | `IMesh` 的顶点、cell→vertex 连通关系被无损映射为 `vtkUnstructuredGrid` polygon cells。 |
 | `ParaViewReadabilityTest.OfficialVtkHdfReaderRoundTripsFieldsMetadataAndTime` | 官方 `vtkHDFWriter` 产物能由 ParaView 使用的官方 `vtkHDFReader` 读回；CellData、原始 face FieldData/拓扑、面积加权 cell-centered 可视化副本、field name、运行期 quantity/unit 以及 step/time 均保持一致。 |
+| `ParaViewReadabilityTest.SingleVtkHdfFileRoundTripsAnOrderedTemporalSeries` | 两个不同 step/time 和场值通过一个 series 写入唯一的 VTKHDF 文件，官方 reader 能枚举并逐步读回。 |
 | `OutputTraceTest.EmitsOnlyLightweightCompletionContextAfterWrite` | 成功输出后只向 trace 发出 `output.completed` 及 `path/step/time` 三个轻量属性，不把场数组塞入 trace。 |
+| `VtkHdfWriterTest.UsesCellFieldSelectionNameWithoutChangingMetadata` | 写出名称可覆盖而无需复制数据，且 quantity/unit metadata 仍与原字段一致。 |
 | `VtkHdfWriterTest.RefusesOverwriteUnlessExplicitlyEnabled` | writer 默认拒绝覆盖已有文件，只有请求显式设置 `overwrite` 时才覆盖。 |
 
 ## 离散算子（`submod/discretization/test/test_operator.cpp`）
@@ -274,6 +276,7 @@
 | `FixedStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 反应模型读取的是本步泊松求解得到的电场。 |
 | `FixedStepPlasmaSimulationTest.RunAdvancesUntilClockIsFinished` | `run()` 严格运行到固定时钟指定的总步数。 |
 | `FixedStepPlasmaSimulationTest.EmitsOrderedTraceEventsAtEachPipelineStage` | 固定步长仿真按 run、步开始、电静力、反应率、源项和步提交的顺序发出结构化事件，并报告提交后的时间。 |
+| `FixedStepPlasmaSimulationTest.WritesInitialPeriodicAndFinalFieldSnapshots` | 固定步 simulation 将同步状态在初始、周期及终态交给 output writer，并发出轻量完成 trace。 |
 | `FixedStepPlasmaSimulationTest.EmitsReturnedDiagnosticBeforeStepFailureTrace` | 固定步长仿真消费求解结果中的底层 diagnostic，附加步数和残差上下文，在 `step.failed` 前输出且不提交失败步。 |
 | `FixedStepPlasmaSimulationTest.SolvesPoissonExactlyOncePerTimeStepAndReusesFactorization` | 每步只解一次泊松方程，且固定矩阵复用分析和分解。 |
 | `FixedStepPlasmaSimulationTest.RejectsClockTimeStepDifferentFromTransportTimeStep` | 仿真时钟与输运推进器的 $\Delta t$ 必须一致。 |
@@ -281,6 +284,7 @@
 | `FixedStepPlasmaSimulationTest.StatisticsRejectFieldsWithoutPhysicalMetadata` | 启用物理统计时，simulation 必须在运行前拒绝缺少预期 `QuantityKind + precise_unit` metadata 的场，避免生成无单位或错单位统计。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
+| `AdaptiveStepPlasmaSimulationTest.WritesScheduledSnapshotsAtAdaptiveStateTimes` | 自适应 simulation 按已完成状态的 step/time 调度初始、周期及终态输出。 |
 | `AdaptiveStepPlasmaSimulationTest.EmitsOrderedTraceEventsWithTimeStepDiagnostics` | 自适应仿真逐阶段发出 trace，且 `timestep.selected` 和 `step.completed` 分别准确报告实际步长与提交后的时间。 |
 | `AdaptiveStepPlasmaSimulationTest.EmitsReturnedDiagnosticBeforeStepFailureTrace` | 自适应仿真同样先输出返回的根因 diagnostic，再输出阶段失败 trace，并保持时钟未推进。 |
 | `AdaptiveStepPlasmaSimulationTest.AdvanceOneStepEvaluatesReactionAndUpdatesSpecies` | 单个自适应步完成电静力、反应率、化学源项和物种更新，且记录实际步长。 |
@@ -290,5 +294,5 @@
 | `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
-| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的运行期 metadata 传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential 和 electric-field 七列统计表及单位，不含普通事件、`DETAILS` 或零值异常计数。 |
+| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的运行期 metadata 传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential 和 electric-field 七列统计表及单位，不含普通事件、`DETAILS` 或零值异常计数。真实 `VtkHdfWriter` 将 step 0 至终态的全部同步状态写入 `<build>/submod/simulation/output/parallel-plate-400v/parallel-plate-400v.vtkhdf`，测试再用官方 reader 校验时间步数与终态 step。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep` | 使用与上述 \(0/400\,\mathrm{V}\) 厘米网格、电离反应和初始物种完全相同的配置；先以真实 CHOLMOD 完成一个物理时间步，再注入一次底层求解失败，验证 `linalg` 域 diagnostic、可读的 `SolveFailed` 状态与根因消息先于 simulation 失败事件输出。结构化失败 trace 写入当前工作目录的 `test.failure.diag.log`。 |

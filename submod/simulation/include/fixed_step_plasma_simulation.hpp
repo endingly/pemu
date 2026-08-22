@@ -1,9 +1,12 @@
 #pragma once
 
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
+#include <pemu/output/output_trace.hpp>
 #include <pemu/physics/reaction.hpp>
 #include <pemu/physics/species.hpp>
+#include <pemu/simulation/detail/plasma_field_output.hpp>
 #include <pemu/simulation/detail/plasma_statistics.hpp>
+#include <pemu/simulation/field_output.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
 #include <pemu/trace/statistics.hpp>
 #include <pemu/trace/trace.hpp>
@@ -13,6 +16,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -26,20 +30,22 @@ class FixedStepPlasmaSimulation {
  public:
   using Stepper = equation::FixedStepMultiSpeciesDriftDiffusionStepper;
 
-  FixedStepPlasmaSimulation(physics::SpeciesCellFields& density,
+  FixedStepPlasmaSimulation(
+      physics::SpeciesCellFields& density,
 
-                            const physics::ReactionNetwork& reaction_network,
+      const physics::ReactionNetwork& reaction_network,
 
-                            Stepper& transport_stepper,
+      Stepper& transport_stepper,
 
-                            ReactionRateEvaluator rate_evaluator,
+      ReactionRateEvaluator rate_evaluator,
 
-                            FixedStepClock clock,
+      FixedStepClock clock,
 
-                            TraceSink trace_sink = {},
+      TraceSink trace_sink = {},
 
-                            pemu::trace::StatisticsOptions
-                                statistics_options = {})
+      pemu::trace::StatisticsOptions statistics_options = {},
+
+      FieldOutputOptions field_output_options = {})
 
       : density_(&density),
 
@@ -55,12 +61,20 @@ class FixedStepPlasmaSimulation {
 
         statistics_options_(statistics_options),
 
+        field_output_options_(std::move(field_output_options)),
+
         reaction_rates_(density.mesh(), reaction_network.size(), 0.0,
                         transport_stepper.fieldMetadata().reaction_rate),
 
         source_(density.mesh(), density.size(), 0.0,
                 transport_stepper.fieldMetadata().number_density_source) {
     validateConfiguration();
+    if (field_output_options_.enabled()) {
+      field_output_series_ = field_output_options_.writer->openSeries(
+          {.mesh = &transport_stepper_->mesh(),
+           .path = detail::plasmaFieldOutputPath(field_output_options_),
+           .overwrite = field_output_options_.overwrite});
+    }
   }
 
   FixedStepPlasmaSimulation(const FixedStepPlasmaSimulation&) = delete;
@@ -134,6 +148,8 @@ class FixedStepPlasmaSimulation {
                        result);
     }
 
+    writeScheduledFieldOutput(false);
+
     // ----------------------------------------------------
     // 2.
     //
@@ -201,6 +217,20 @@ class FixedStepPlasmaSimulation {
     // ----------------------------------------------------
 
     clock_.advance();
+
+    if (clock_.finished() && field_output_options_.enabled()) {
+      const auto final_result =
+          transport_stepper_->updateElectrostatics(*density_);
+      if (!final_result.success()) {
+        if constexpr (tracing_enabled_) {
+          emitDiagnostic(final_result);
+          emitSolverResult("final_output.electrostatics.failed",
+                           pemu::trace::Severity::Error, final_result);
+        }
+        return final_result;
+      }
+      writeScheduledFieldOutput(true);
+    }
 
     if constexpr (tracing_enabled_) {
       emitStepCompleted(result);
@@ -418,6 +448,33 @@ class FixedStepPlasmaSimulation {
         clock_.step(), clock_.time());
   }
 
+  /**
+   * @brief Captures a selected synchronized state and finalizes the series at
+   * the terminal state.
+   * @param terminal Whether the state is the terminal simulation state.
+   */
+  void writeScheduledFieldOutput(bool terminal) {
+    if (!field_output_options_.enabled()) {
+      return;
+    }
+
+    if (detail::shouldWritePlasmaFieldSnapshot(
+            field_output_options_, clock_.step(), terminal)) {
+      (void)detail::writePlasmaFieldSnapshot(
+          *density_, *transport_stepper_, field_output_options_,
+          *field_output_series_,
+          {.step = static_cast<std::uint64_t>(clock_.step()),
+           .time = clock_.time()});
+      field_output_has_snapshots_ = true;
+    }
+    if (terminal && field_output_has_snapshots_) {
+      const auto record = field_output_series_->finish();
+      if constexpr (tracing_enabled_) {
+        output::traceOutputCompleted(trace_sink_, record);
+      }
+    }
+  }
+
   template <std::size_t N>
   void emitTrace(
       std::string_view name, pemu::trace::Severity severity,
@@ -462,6 +519,7 @@ class FixedStepPlasmaSimulation {
         statistics_options_, *density_, transport_stepper_->chargeDensity(),
         transport_stepper_->potential(),
         transport_stepper_->electricFieldNormal());
+    validateFieldOutputOptions(field_output_options_);
   }
 
  private:
@@ -494,6 +552,12 @@ class FixedStepPlasmaSimulation {
   [[no_unique_address]] TraceSink trace_sink_;
 
   pemu::trace::StatisticsOptions statistics_options_;
+
+  FieldOutputOptions field_output_options_;
+
+  std::unique_ptr<output::IFieldOutputSeries> field_output_series_;
+
+  bool field_output_has_snapshots_{};
 
   // --------------------------------------------------------
   // Workspaces.

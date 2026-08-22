@@ -25,12 +25,13 @@ target_link_libraries(
         pemu::trace
         VTK::CommonCore
         VTK::CommonDataModel
+        VTK::CommonExecutionModel
         VTK::IOHDF
 )
 
 vtk_module_autoinit(
     TARGETS output
-    MODULES VTK::CommonCore VTK::CommonDataModel VTK::IOHDF
+    MODULES VTK::CommonCore VTK::CommonDataModel VTK::CommonExecutionModel VTK::IOHDF
 )
 
 if(BUILD_TESTING)
