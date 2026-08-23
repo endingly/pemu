@@ -314,7 +314,7 @@ struct ElectronEnergySubsystem {
                       Stepper& transport,
                       const field::CellField<double>& potential,
                       const field::FaceField<double>& electric_field_normal,
-                      const physics::ReactionRateFields& reaction_rates,
+                      const physics::reaction::ReactionRateFields& reaction_rates,
                       const physics::SpeciesCellFields& species_source) {
     transport.computeParticleFluxNormal(density, electron,
                                         particle_flux_normal);
@@ -379,7 +379,7 @@ struct ElectronEnergySubsystem {
 template <typename Stepper, typename Clock>
 struct PlasmaWorkflowCore {
   physics::SpeciesCellFields* density;
-  const physics::ReactionNetwork* reaction_network;
+  const physics::reaction::ReactionNetwork* reaction_network;
   Stepper* transport_stepper;
   PlasmaReactionRateEvaluator rate_evaluator;
   Clock clock;
@@ -387,7 +387,7 @@ struct PlasmaWorkflowCore {
   trace::StatisticsOptions statistics_options;
   FieldOutputOptions field_output_options;
   CheckpointOptions checkpoint_options;
-  physics::ReactionRateFields reaction_rates;
+  physics::reaction::ReactionRateFields reaction_rates;
   physics::SpeciesCellFields source;
   ElectronEnergySubsystem<Stepper> electron_energy;
   std::unique_ptr<output::dump::ISeries> field_output_series;
@@ -397,7 +397,7 @@ struct PlasmaWorkflowCore {
   double workflow_kind;
 
   PlasmaWorkflowCore(physics::SpeciesCellFields& density_in,
-                     const physics::ReactionNetwork& reactions,
+                     const physics::reaction::ReactionNetwork& reactions,
                      Stepper& stepper, PlasmaReactionRateEvaluator evaluator,
                      ElectronEnergyConfiguration energy_configuration,
                      Clock clock_in, trace::AnyTraceSink sink,

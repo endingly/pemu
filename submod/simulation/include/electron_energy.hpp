@@ -4,7 +4,7 @@
 #include <pemu/equation/explicit_electron_energy_stepper.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
-#include <pemu/physics/reaction.hpp>
+#include <pemu/physics/reaction/network.hpp>
 #include <pemu/physics/species.hpp>
 
 #include <functional>
@@ -17,7 +17,7 @@ struct ElectronEnergySourceContext {
   const field::CellField<double>& potential;
   const field::FaceField<double>& electric_field_normal;
   const field::FaceField<double>& electron_particle_flux_normal;
-  const physics::ReactionRateFields& reaction_rates;
+  const physics::reaction::ReactionRateFields& reaction_rates;
   const physics::SpeciesCellFields& species_source;
   const field::CellField<double>& mean_energy;
 };

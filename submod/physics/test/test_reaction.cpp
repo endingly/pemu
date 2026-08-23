@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <pemu/mesh/moab_mesh.hpp>
-#include <pemu/physics/ionization_reaction.hpp>
-#include <pemu/physics/reaction.hpp>
+#include <pemu/physics/reaction/mass_action.hpp>
+#include <pemu/physics/reaction/network.hpp>
+
+#include <algorithm>
+#include <limits>
 
 namespace pemu::physics::test {
 
@@ -36,7 +39,7 @@ TEST_F(ReactionTest, ElectronImpactIonizationComputesExpectedRate) {
 
   constexpr double rate_coefficient = 2.0;
 
-  physics::reaction::electronImpactIonizationRate(
+  physics::reaction::binaryReactionRate(
       electron_density, neutral_density, rate_coefficient, rate);
 
   for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
@@ -50,68 +53,11 @@ TEST_F(ReactionTest, ZeroElectronDensityProducesNoIonization) {
 
   field::CellField<double> rate(mesh_, 123.0);
 
-  physics::reaction::electronImpactIonizationRate(electron_density, 10.0, 2.0,
-                                                  rate);
+  physics::reaction::binaryReactionRate(electron_density, 10.0, 2.0, rate);
 
   for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
 
     EXPECT_NEAR(rate[cell], 0.0, 1e-12);
-  }
-}
-
-TEST_F(ReactionTest, IonizationCreatesElectronIonPairs) {
-  field::CellField<double> rate(mesh_, 5.0);
-
-  field::CellField<double> electron_source(mesh_, 0.0);
-
-  field::CellField<double> ion_source(mesh_, 0.0);
-
-  physics::reaction::addPairProductionSource(rate, electron_source, ion_source);
-
-  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
-
-    EXPECT_NEAR(electron_source[cell], 5.0, 1e-12);
-
-    EXPECT_NEAR(ion_source[cell], 5.0, 1e-12);
-  }
-}
-
-TEST_F(ReactionTest, PairProductionAccumulatesIntoExistingSource) {
-  field::CellField<double> rate(mesh_, 5.0);
-
-  field::CellField<double> electron_source(mesh_, 2.0);
-
-  field::CellField<double> ion_source(mesh_, 3.0);
-
-  physics::reaction::addPairProductionSource(rate, electron_source, ion_source);
-
-  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
-
-    EXPECT_NEAR(electron_source[cell], 7.0, 1e-12);
-
-    EXPECT_NEAR(ion_source[cell], 8.0, 1e-12);
-  }
-}
-
-TEST_F(ReactionTest, PairProductionCreatesNoNetCharge) {
-  field::CellField<double> rate(mesh_, 5.0);
-
-  field::CellField<double> electron_source(mesh_, 0.0);
-
-  field::CellField<double> ion_source(mesh_, 0.0);
-
-  physics::reaction::addPairProductionSource(rate, electron_source, ion_source);
-
-  constexpr double electron_charge = -2.0;
-
-  constexpr double ion_charge = +2.0;
-
-  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
-
-    const double charge_source =
-        electron_charge * electron_source[cell] + ion_charge * ion_source[cell];
-
-    EXPECT_NEAR(charge_source, 0.0, 1e-12);
   }
 }
 
@@ -122,7 +68,7 @@ TEST_F(ReactionNetworkTest, PairIonizationConservesCharge) {
 
   const auto ion = species.add({.name = "ion", .charge = +2.0});
 
-  physics::ReactionNetwork network(species);
+  physics::reaction::ReactionNetwork network(species);
 
   const auto reaction =
       network.addReaction({.name = "ionization",
@@ -134,12 +80,57 @@ TEST_F(ReactionNetworkTest, PairIonizationConservesCharge) {
   EXPECT_TRUE(network.conservesCharge(reaction));
 }
 
+TEST_F(ReactionNetworkTest,
+       StoresThirdBodyOrderIndependentlyFromNetStoichiometry) {
+  physics::SpeciesSet species;
+  const auto electron = species.add({.name = "e", .charge = -1.0});
+  const auto oxygen = species.add({.name = "O2"});
+  const auto third_body = species.add({.name = "M"});
+  const auto negative_ion = species.add({.name = "O2-", .charge = -1.0});
+  physics::reaction::ReactionNetwork network(species);
+
+  const auto attachment = network.addReaction(
+      {.name = "three-body attachment",
+       .stoichiometry = {{electron, -1.0},
+                         {oxygen, -1.0},
+                         {negative_ion, +1.0}},
+       .kinetic_orders = {
+           {electron, 1.0}, {oxygen, 1.0}, {third_body, 1.0}}});
+
+  const auto& definition = network.at(attachment);
+  ASSERT_EQ(definition.kinetic_orders.size(), 3u);
+  EXPECT_EQ(definition.kinetic_orders[2].species, third_body);
+  EXPECT_TRUE(std::ranges::none_of(
+      definition.stoichiometry,
+      [third_body](const auto& term) { return term.species == third_body; }));
+  EXPECT_TRUE(network.conservesCharge(attachment));
+}
+
+TEST_F(ReactionNetworkTest, RejectsInvalidAndDuplicateKineticOrders) {
+  physics::SpeciesSet species;
+  const auto electron = species.add({.name = "e", .charge = -1.0});
+  physics::reaction::ReactionNetwork network(species);
+
+  EXPECT_THROW(static_cast<void>(network.addReaction(
+                   {.name = "duplicate",
+                    .stoichiometry = {{electron, -1.0}},
+                    .kinetic_orders = {{electron, 1.0}, {electron, 2.0}}})),
+               std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(network.addReaction(
+          {.name = "invalid order",
+           .stoichiometry = {{electron, -1.0}},
+           .kinetic_orders = {
+               {electron, std::numeric_limits<double>::infinity()}}})),
+      std::invalid_argument);
+}
+
 TEST_F(ReactionNetworkTest, DetectsChargeViolatingReaction) {
   physics::SpeciesSet species;
 
   const auto electron = species.add({.name = "e", .charge = -1.0});
 
-  physics::ReactionNetwork network(species);
+  physics::reaction::ReactionNetwork network(species);
 
   const auto invalid =
       network.addReaction({.name = "electron from nowhere",
@@ -158,9 +149,9 @@ TEST_F(ReactionNetworkTest, AccumulatesStoichiometricSources) {
 
   const auto ion = species.add({.name = "ion", .charge = +1.0});
 
-  physics::ReactionNetwork network(species);
+  physics::reaction::ReactionNetwork network(species);
 
-  auto _ = network.addReaction(
+  [[maybe_unused]] const auto ionization = network.addReaction(
       {.name = "ionization", .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
 
   std::vector<field::CellField<double>> rates;
@@ -186,12 +177,12 @@ TEST_F(ReactionNetworkTest, MultipleReactionsAccumulateCorrectly) {
 
   const auto ion = species.add({.name = "ion", .charge = +1.0});
 
-  physics::ReactionNetwork network(species);
+  physics::reaction::ReactionNetwork network(species);
 
-  auto _ = network.addReaction(
+  [[maybe_unused]] const auto ionization = network.addReaction(
       {.name = "ionization", .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
 
-  auto _ =
+  [[maybe_unused]] const auto recombination =
       network.addReaction({.name = "recombination",
                            .stoichiometry = {{electron, -1.0}, {ion, -1.0}}});
 

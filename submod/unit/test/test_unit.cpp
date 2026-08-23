@@ -83,6 +83,8 @@ TEST(MpUnitsBridgeTest, ProducesRuntimeMetadataWithoutStringParsing) {
             units::precise::energy::eV / units::precise::cm.pow(3));
   EXPECT_EQ(pemu::to_string(electric_field.kind()),
             "normal_electric_field_strength");
+  EXPECT_EQ(pemu::to_string(QuantityKind::reaction_rate_coefficient),
+            "reaction_rate_coefficient");
 }
 
 TEST(RuntimeUnitStringTest, UsesStablePlasmaEnergySpellings) {

@@ -5,7 +5,8 @@
 #include <pemu/linalg/cholmod_solver.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 #include <pemu/physics/charged_species_transport.hpp>
-#include <pemu/physics/ionization_reaction.hpp>
+#include <pemu/physics/reaction/mass_action.hpp>
+#include <pemu/physics/reaction/network.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -561,11 +562,21 @@ TEST_F(FixedStepElectrostaticDriftDiffusionReactionTest,
   // Reaction rate and species sources
   // ========================================================
 
-  field::CellField<double> reaction_rate(mesh_, 0.0);
-
-  field::CellField<double> electron_source(mesh_, 0.0);
-
-  field::CellField<double> ion_source(mesh_, 0.0);
+  physics::SpeciesSet reaction_species;
+  const auto electron_id = reaction_species.add({.name = "e", .charge = -1.0});
+  const auto ion_id = reaction_species.add({.name = "ion", .charge = +1.0});
+  physics::reaction::ReactionNetwork reaction_network(reaction_species);
+  const auto ionization = reaction_network.addReaction(
+      {.name = "ionization",
+       .stoichiometry = {{electron_id, +1.0}, {ion_id, +1.0}},
+       .kinetic_orders = {{electron_id, 1.0}}});
+  physics::reaction::ReactionRateFields reaction_rates(
+      mesh_, reaction_network.size(), 0.0);
+  physics::SpeciesCellFields species_source(mesh_, reaction_species.size(),
+                                            0.0);
+  auto& reaction_rate = reaction_rates[ionization];
+  auto& electron_source = species_source[electron_id];
+  auto& ion_source = species_source[ion_id];
 
   // ========================================================
   // Calculate:
@@ -573,7 +584,7 @@ TEST_F(FixedStepElectrostaticDriftDiffusionReactionTest,
   //     R = k_ion n_e n_N
   // ========================================================
 
-  physics::reaction::electronImpactIonizationRate(
+  physics::reaction::binaryReactionRate(
       electron_density, neutral_density, ionization_rate_coefficient,
       reaction_rate);
 
@@ -593,11 +604,8 @@ TEST_F(FixedStepElectrostaticDriftDiffusionReactionTest,
   //     S_i += R
   // ========================================================
 
-  electron_source.fill(0.0);
-  ion_source.fill(0.0);
-
-  physics::reaction::addPairProductionSource(reaction_rate, electron_source,
-                                             ion_source);
+  species_source.fill(0.0);
+  reaction_network.accumulateSources(reaction_rates.span(), species_source);
 
   for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
 

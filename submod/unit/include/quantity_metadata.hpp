@@ -17,6 +17,7 @@ enum class QuantityKind : std::uint8_t {
   particle_number_density,
   particle_number_density_rate,
   reaction_rate_density,
+  reaction_rate_coefficient,
   electric_charge_density,
   electric_potential,
   electric_potential_difference,
@@ -104,6 +105,8 @@ namespace pemu {
       return "particle_number_density_rate";
     case reaction_rate_density:
       return "reaction_rate_density";
+    case reaction_rate_coefficient:
+      return "reaction_rate_coefficient";
     case electric_charge_density:
       return "electric_charge_density";
     case electric_potential:

@@ -26,6 +26,35 @@ class ElectronFieldPowerTest : public ::testing::Test {
 
 }  // namespace
 
+TEST(ElectronTemperatureTest, ConvertsMaxwellianMeanEnergyToTeInEv) {
+  EXPECT_DOUBLE_EQ(electronTemperatureEv(0.0), 0.0);
+  EXPECT_DOUBLE_EQ(electronTemperatureEv(3.0), 2.0);
+  EXPECT_THROW(static_cast<void>(electronTemperatureEv(-1.0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(
+                   electronTemperatureEv(std::numeric_limits<double>::infinity())),
+               std::invalid_argument);
+}
+
+TEST_F(ElectronFieldPowerTest, ConvertsMeanEnergyFieldAtomically) {
+  field::CellField<double> mean_energy(mesh_, 0.0);
+  field::CellField<double> temperature(mesh_, 91.0);
+  mean_energy[mesh::CellId{0}] = 1.5;
+  mean_energy[mesh::CellId{1}] = 6.0;
+
+  computeElectronTemperatureEv(mean_energy, temperature);
+
+  EXPECT_DOUBLE_EQ(temperature[mesh::CellId{0}], 1.0);
+  EXPECT_DOUBLE_EQ(temperature[mesh::CellId{1}], 4.0);
+
+  mean_energy[mesh::CellId{1}] = -1.0;
+  temperature.fill(91.0);
+  EXPECT_THROW(computeElectronTemperatureEv(mean_energy, temperature),
+               std::invalid_argument);
+  EXPECT_DOUBLE_EQ(temperature[mesh::CellId{0}], 91.0);
+  EXPECT_DOUBLE_EQ(temperature[mesh::CellId{1}], 91.0);
+}
+
 TEST_F(ElectronFieldPowerTest,
        ReconstructsPositiveHeatingForElectronFluxAgainstField) {
   field::FaceField<double> electron_flux_normal(mesh_, 0.0);

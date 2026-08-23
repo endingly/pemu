@@ -2,7 +2,7 @@
 
 #include <pemu/equation/adaptive_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/output/checkpoint/i_reader.hpp>
-#include <pemu/physics/reaction.hpp>
+#include <pemu/physics/reaction/network.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/checkpoint.hpp>
@@ -26,7 +26,7 @@ class AdaptiveStepPlasmaSimulation {
   using TimeStepProposal = equation::time_integration::TimeStepProposal;
 
   AdaptiveStepPlasmaSimulation(physics::SpeciesCellFields& density,
-                               const physics::ReactionNetwork& reaction_network,
+                               const physics::reaction::ReactionNetwork& reaction_network,
                                Stepper& transport_stepper,
                                PlasmaReactionRateEvaluator rate_evaluator,
                                ElectronEnergyConfiguration electron_energy,

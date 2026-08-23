@@ -6,3 +6,4 @@
 #include <pemu/simulation/field_output.hpp>
 #include <pemu/simulation/fixed_step_plasma_simulation.hpp>
 #include <pemu/simulation/simulation_state.hpp>
+#include <pemu/simulation/tabulated_electron_impact_evaluator.hpp>

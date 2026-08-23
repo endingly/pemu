@@ -239,13 +239,15 @@
 | `ElectronFieldPowerTest.RejectsNonFiniteFaceData` | 电场功重构在数值进入单元累加前拒绝非有限的面通量或电场。 |
 | `ReactionTest.ElectronImpactIonizationComputesExpectedRate` | 电子碰撞电离率按给定电子密度、中性粒子密度和速率系数计算。 |
 | `ReactionTest.ZeroElectronDensityProducesNoIonization` | 没有电子时电子碰撞电离率严格为零。 |
-| `ReactionTest.IonizationCreatesElectronIonPairs` | 一次电离同时产生一个电子和一个正离子。 |
-| `ReactionTest.PairProductionAccumulatesIntoExistingSource` | 反应源项累加而非覆盖已有源项。 |
-| `ReactionTest.PairProductionCreatesNoNetCharge` | 成对产生电子和离子不会凭空产生净电荷。 |
 | `ReactionNetworkTest.PairIonizationConservesCharge` | 反应网络能识别成对电离的电荷守恒。 |
+| `ReactionNetworkTest.StoresThirdBodyOrderIndependentlyFromNetStoichiometry` | 第三体可以参与速率定律而不产生净物种源。 |
+| `ReactionNetworkTest.RejectsInvalidAndDuplicateKineticOrders` | 非法或重复的动力学级数在网络构造时被拒绝。 |
 | `ReactionNetworkTest.DetectsChargeViolatingReaction` | 违反电荷守恒的化学计量关系会被检测。 |
 | `ReactionNetworkTest.AccumulatesStoichiometricSources` | 反应率依据化学计量数正确转换为各物种源项。 |
 | `ReactionNetworkTest.MultipleReactionsAccumulateCorrectly` | 多个反应对同一物种的贡献正确求和。 |
+| `ReactionKineticsTest.EvaluatesArbitraryThreeBodyMassActionRate` | 通用质量作用律正确组装三个空间密度因子。 |
+| `ReactionKineticsTest.AssemblerEvaluatesThreeBodyLawAndLeavesThirdBodySourceAbsent` | 三体 assembler 计算反应率，同时保持第三体净源为零。 |
+| `ReactionKineticsTest.AssemblerRejectsBinaryCoefficientUnitForThreeBodyLaw` | 三体反应拒绝错误的 `cm^3/s` 二体系数单位。 |
 | `SpeciesSetTest.AssignsDenseStableIds` | 物种 ID 稠密、稳定并可用于场数组索引。 |
 | `SpeciesFieldsTest.StoresIndependentFieldsPerSpecies` | 每个物种拥有互不串扰的独立场。 |
 

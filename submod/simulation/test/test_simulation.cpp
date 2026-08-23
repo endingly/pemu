@@ -12,7 +12,8 @@
 #include <pemu/output/checkpoint/vtkhdf.hpp>
 #include <pemu/output/dump/i_writer.hpp>
 #include <pemu/output/dump/vtkhdf_writer.hpp>
-#include <pemu/physics/reaction.hpp>
+#include <pemu/physics/reaction/mass_action.hpp>
+#include <pemu/physics/reaction/network.hpp>
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/fixed_step_clock.hpp>
@@ -247,20 +248,15 @@ ElectronIonIds addElectronAndIon(physics::SpeciesSet& species,
 struct ElectronImpactIonizationEvaluator {
   physics::SpeciesId electron;
 
-  physics::ReactionId ionization;
+  physics::reaction::ReactionId ionization;
 
   double neutral_density{};
   double rate_coefficient{};
 
-  void operator()(const physics::SpeciesCellFields& density,
-
-                  const field::CellField<double>&,
-
-                  const field::FaceField<double>&,
-
-                  physics::ReactionRateFields& reaction_rates) const {
-    physics::reaction::electronImpactIonizationRate(
-        density[electron], neutral_density, rate_coefficient,
+  void operator()(const PlasmaReactionRateContext& context,
+                  physics::reaction::ReactionRateFields& reaction_rates) const {
+    physics::reaction::binaryReactionRate(
+        context.density[electron], neutral_density, rate_coefficient,
         reaction_rates[ionization]);
   }
 };
@@ -276,29 +272,24 @@ struct ElectronImpactIonizationEvaluator {
 struct RecordingIonizationEvaluator {
   physics::SpeciesId electron;
 
-  physics::ReactionId ionization;
+  physics::reaction::ReactionId ionization;
 
   double neutral_density{};
   double rate_coefficient{};
 
   std::vector<double>* observed_electron_density{};
 
-  void operator()(const physics::SpeciesCellFields& density,
-
-                  const field::CellField<double>&,
-
-                  const field::FaceField<double>&,
-
-                  physics::ReactionRateFields& reaction_rates) const {
+  void operator()(const PlasmaReactionRateContext& context,
+                  physics::reaction::ReactionRateFields& reaction_rates) const {
     if (observed_electron_density == nullptr) {
 
       throw std::logic_error("observation buffer is null");
     }
 
-    observed_electron_density->push_back(density[electron][0]);
+    observed_electron_density->push_back(context.density[electron][0]);
 
-    physics::reaction::electronImpactIonizationRate(
-        density[electron], neutral_density, rate_coefficient,
+    physics::reaction::binaryReactionRate(
+        context.density[electron], neutral_density, rate_coefficient,
         reaction_rates[ionization]);
   }
 };
@@ -322,19 +313,14 @@ struct RecordingIonizationEvaluator {
 // ============================================================
 
 struct ElectricFieldAwareEvaluator {
-  physics::ReactionId reaction;
+  physics::reaction::ReactionId reaction;
   double* observed_maximum{};
 
-  void operator()(const physics::SpeciesCellFields&,
-
-                  const field::CellField<double>&,
-
-                  const field::FaceField<double>& electric_field,
-
-                  physics::ReactionRateFields& reaction_rates) const {
+  void operator()(const PlasmaReactionRateContext& context,
+                  physics::reaction::ReactionRateFields& reaction_rates) const {
     double maximum = 0.0;
 
-    for (const double value : electric_field) {
+    for (const double value : context.electric_field_normal) {
 
       maximum = std::max(maximum, std::abs(value));
     }
@@ -355,13 +341,8 @@ struct ElectricFieldAwareEvaluator {
 // ============================================================
 
 struct NoReactionEvaluator {
-  void operator()(const physics::SpeciesCellFields&,
-
-                  const field::CellField<double>&,
-
-                  const field::FaceField<double>&,
-
-                  physics::ReactionRateFields&) const noexcept {}
+  void operator()(const PlasmaReactionRateContext&,
+                  physics::reaction::ReactionRateFields&) const noexcept {}
 };
 
 /** @brief Explicitly selects zero additional energy exchange in tests. */
@@ -384,7 +365,7 @@ struct ConstantElectronEnergyAdditionalSourceEvaluator {
 
 /** @brief Converts one reaction rate into its electron inelastic-energy loss. */
 struct ReactionEnergyLossEvaluator {
-  physics::ReactionId reaction;
+  physics::reaction::ReactionId reaction;
   double energy_loss_per_reaction;
 
   void operator()(const ElectronEnergySourceContext& context,
@@ -918,7 +899,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   // Reaction network
   // --------------------------------------------------------
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   const auto ionization = reactions.addReaction(
       {.name = "electron impact ionization",
@@ -998,6 +979,47 @@ TEST_F(FixedStepPlasmaSimulationTest,
   }
 }
 
+/**
+ * @brief Proves Simulation supplies synchronized mean energy to M14 chemistry.
+ *
+ * Initially w_e=n_e=1, hence mean energy is 1 eV and Maxwellian Te is 2/3 eV.
+ * Linear interpolation gives k=0.75; with target density 4 the reaction rate is
+ * 3, so one source-only step of dt=0.1 raises both charged densities to 1.3.
+ */
+TEST_F(FixedStepPlasmaSimulationTest,
+       TabulatedTeChemistryUsesSynchronizedElectronEnergy) {
+  constexpr double dt = 0.1;
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  field::CellField<double> target_density(mesh_, 4.0);
+  physics::reaction::ReactionNetwork reactions(species);
+  const auto ionization = reactions.addReaction(
+      {.name = "Te-dependent ionization",
+       .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  TabulatedElectronImpactEvaluator evaluator(
+      ids.electron, ionization, target_density,
+      ElectronImpactRateCoordinate::electron_temperature_ev,
+      physics::reaction::TabulatedRateCoefficient(
+          {0.0, 1.0}, {0.25, 1.0},
+          physics::reaction::RateInterpolation::linear),
+      true);
+  FixedStepPlasmaSimulation simulation(
+      density, reactions, transport, std::move(evaluator),
+      makeTestElectronEnergy(electron_energy_density_), FixedStepClock(dt, 1));
+
+  ASSERT_TRUE(simulation.advance().success());
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(density[ids.electron][cell], 1.3, 1e-12);
+    EXPECT_NEAR(density[ids.ion][cell], 1.3, 1e-12);
+  }
+}
+
 // ============================================================
 // 2. Reaction rates MUST be reevaluated every timestep.
 //
@@ -1029,7 +1051,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   const auto ionization = reactions.addReaction(
       {.name = "ionization",
@@ -1128,7 +1150,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   const auto reaction = reactions.addReaction(
       {.name = "field dependent test reaction",
@@ -1202,7 +1224,7 @@ TEST_F(FixedStepPlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
 
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   auto potential_bc = makeZeroPotentialBoundaryConditions();
 
@@ -1245,7 +1267,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1285,7 +1307,7 @@ TEST_F(FixedStepPlasmaSimulationTest, StopFailureTransitionsWorkflowToFailed) {
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1313,7 +1335,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
@@ -1386,7 +1408,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1451,7 +1473,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1511,7 +1533,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   auto potential_bc = makeZeroPotentialBoundaryConditions();
 
@@ -1576,7 +1598,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   auto potential_bc = makeZeroPotentialBoundaryConditions();
 
@@ -1625,7 +1647,7 @@ TEST_F(FixedStepPlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
 
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   auto potential_bc = makeZeroPotentialBoundaryConditions();
 
@@ -1667,7 +1689,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1691,7 +1713,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
                                               0.0);
   original_density[original_ids.electron].fill(1.0);
   original_density[original_ids.ion].fill(2.0);
-  physics::ReactionNetwork original_reactions(original_species);
+  physics::reaction::ReactionNetwork original_reactions(original_species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper original_transport(
       mesh_, original_species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(original_species.size(), 1.0),
@@ -1723,7 +1745,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesCellFields reordered_density(mesh_, reordered_species.size(),
                                                7.0);
   field::CellField<double> reordered_energy_density(mesh_, 7.0);
-  physics::ReactionNetwork reordered_reactions(reordered_species);
+  physics::reaction::ReactionNetwork reordered_reactions(reordered_species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper reordered_transport(
       mesh_, reordered_species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(reordered_species.size(), 1.0),
@@ -1759,7 +1781,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
                                      metadata.number_density);
   field::CellField<double> energy_density(mesh_, 2.0,
                                           caller_energy_metadata);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1814,7 +1836,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
@@ -1845,7 +1867,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
        CheckpointWorkflowRestoresClockDensityAndTimeStepHistory) {
   physics::SpeciesSet species;
   const auto ids = addElectronAndIon(species);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization = reactions.addReaction(
       {.name = "ionization",
        .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
@@ -1939,7 +1961,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -1971,7 +1993,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto loss = reactions.addReaction(
       {.name = "pair loss",
        .stoichiometry = {{ids.electron, -1.0}, {ids.ion, -1.0}}});
@@ -2010,7 +2032,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0,
                                      metadata.number_density);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, 0.01, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -2041,7 +2063,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -2064,7 +2086,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -2102,7 +2124,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
@@ -2190,7 +2212,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   (void)addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -2225,7 +2247,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization = reactions.addReaction(
       {.name = "electron impact ionization",
        .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
@@ -2265,7 +2287,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization = reactions.addReaction(
       {.name = "ionization",
        .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
@@ -2303,7 +2325,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto reaction = reactions.addReaction(
       {.name = "field dependent test reaction",
        .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
@@ -2332,7 +2354,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto loss = reactions.addReaction(
       {.name = "pair loss",
        .stoichiometry = {{ids.electron, -1.0}, {ids.ion, -1.0}}});
@@ -2374,7 +2396,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   const auto ids = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
@@ -2409,7 +2431,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   auto _ = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   auto backend = std::make_unique<CountingSolver>();
   auto* counting_solver = backend.get();
@@ -2437,7 +2459,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   physics::SpeciesSet species;
   auto _ = addElectronAndIon(species);
   physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
 
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
@@ -2474,7 +2496,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   const auto ids = addElectronAndIon(species, 1.0, 0.5, 1e-16, 1e-16);
   physics::SpeciesCellFields density(mesh_, species.size(), initial_density);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization = reactions.addReaction(
       {.name = "uniform electron-impact ionization",
        .stoichiometry = {{ids.electron, +1.0}, {ids.ion, +1.0}}});
@@ -2598,7 +2620,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   field::CellField<double> electron_energy_density(
       mesh_, initial_energy_density, field_metadata.electron_energy_density);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization =
       reactions.addReaction({.name = "electron-impact ionization",
                              .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
@@ -2844,7 +2866,7 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
        .diffusivity = ion_diffusivity.numerical_value_in(diffusivity_unit),
        .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization =
       reactions.addReaction({.name = "electron-impact ionization",
                              .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});
@@ -3037,7 +3059,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   field::CellField<double> electron_energy_density(
       mesh_, initial_energy_density, field_metadata.electron_energy_density);
 
-  physics::ReactionNetwork reactions(species);
+  physics::reaction::ReactionNetwork reactions(species);
   const auto ionization =
       reactions.addReaction({.name = "electron-impact ionization",
                              .stoichiometry = {{electron, +1.0}, {ion, +1.0}}});

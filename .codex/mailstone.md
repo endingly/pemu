@@ -30,14 +30,19 @@ M12 Output / checkpoint                 ✅
 
 Phase III — Better Plasma Physics
 ────────────────────────────────────
-M13 Electron energy equation            ← NOW
+M13 Electron energy equation            ✅
     M13.1 energy quantities / metadata  ✅
     M13.2 mean-energy conversion        ✅
     M13.3 SG energy transport           ✅
     M13.4 explicit CFL / positivity     ✅
     M13.5 numerical tests / document    ✅
     M13.6 Simulation integration        ✅
-M14 E/N / Te dependent chemistry
+M14 E/N / Te dependent chemistry        ✅
+    M14.1 reduced-field / Te conversion ✅
+    M14.2 tabulated rate coefficients   ✅
+    M14.3 cell-local reaction-rate assembly ✅
+    M14.4 numerical tests / document    ✅
+    M14.5 Simulation integration        ✅
 M15 Plasma wall / electrode BC
 
 

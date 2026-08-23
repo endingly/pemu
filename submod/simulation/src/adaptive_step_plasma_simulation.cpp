@@ -16,7 +16,7 @@ struct AdaptiveStepPlasmaSimulation::Impl {
   Core core;
 
   Impl(physics::SpeciesCellFields& density,
-       const physics::ReactionNetwork& reactions, Stepper& stepper,
+       const physics::reaction::ReactionNetwork& reactions, Stepper& stepper,
        PlasmaReactionRateEvaluator evaluator,
        ElectronEnergyConfiguration electron_energy, AdaptiveTimeClock clock,
        trace::AnyTraceSink sink, trace::StatisticsOptions statistics,
@@ -56,9 +56,13 @@ struct AdaptiveStepPlasmaSimulation::Impl {
     self.electron_energy.refreshMeanEnergy(*self.density);
     self.writeOutput(false);
     self.reaction_rates.fill(0.0);
-    self.rate_evaluator(*self.density, self.transport_stepper->potential(),
-                        self.transport_stepper->electricFieldNormal(),
-                        self.reaction_rates);
+    self.rate_evaluator(
+        {.density = *self.density,
+         .potential = self.transport_stepper->potential(),
+         .electric_field_normal =
+             self.transport_stepper->electricFieldNormal(),
+         .electron_mean_energy = self.electron_energy.mean_energy},
+        self.reaction_rates);
     const std::array rates{
         trace::TraceAttribute{"step",
                               static_cast<std::uint64_t>(self.clock.step())},
@@ -138,7 +142,7 @@ struct AdaptiveStepPlasmaSimulation::Impl {
 
 AdaptiveStepPlasmaSimulation::AdaptiveStepPlasmaSimulation(
     physics::SpeciesCellFields& density,
-    const physics::ReactionNetwork& reactions, Stepper& transport,
+    const physics::reaction::ReactionNetwork& reactions, Stepper& transport,
     PlasmaReactionRateEvaluator evaluator,
     ElectronEnergyConfiguration electron_energy, AdaptiveTimeClock clock,
     trace::AnyTraceSink sink, trace::StatisticsOptions statistics,

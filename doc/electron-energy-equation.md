@@ -15,8 +15,8 @@ $$
 `computeElectronEnergyDensity()` 与 `computeElectronMeanEnergy()` 完成两种表示间的转换；
 后者在 $n_e\le n_\mathrm{floor}$ 的真空单元中定义 $\bar\varepsilon_e=0$，避免除以趋零密度。
 
-本阶段不计算 E/N 或平均能量相关的反应系数，也不定义电极/壁面能量通量；它们分别属于
-M14 和 M15。
+电子能量方程本身不计算反应系数；M14 在独立的 chemistry 层以这里产生的平均能量或电场
+状态计算反应率。电极/壁面能量通量仍属于 M15。
 
 ## 2. 控制方程与闭合
 

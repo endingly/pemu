@@ -156,4 +156,31 @@ inline void computeElectronMeanEnergy(
   }
 }
 
+/**
+ * @brief Converts mean electron energy in eV to equivalent Maxwellian Te in eV.
+ *
+ * Plasma notation reports k_B*T_e as an energy. For an isotropic Maxwellian
+ * distribution, mean_energy = 3/2*k_B*T_e.
+ */
+[[nodiscard]] inline double electronTemperatureEv(double mean_energy_ev) {
+  if (!std::isfinite(mean_energy_ev) || mean_energy_ev < 0.0) {
+    throw std::invalid_argument(
+        "electron mean energy must be finite and non-negative");
+  }
+  return (2.0 / 3.0) * mean_energy_ev;
+}
+
+/** @brief Converts a mean-energy field in eV to equivalent Te values in eV. */
+inline void computeElectronTemperatureEv(
+    const field::CellField<double>& mean_energy_ev,
+    field::CellField<double>& electron_temperature_ev) {
+  field::ensureSameMesh(mean_energy_ev, electron_temperature_ev);
+  for (const double value : mean_energy_ev) {
+    static_cast<void>(electronTemperatureEv(value));
+  }
+  for (mesh::CellId cell = 0; cell < mean_energy_ev.mesh().numCells(); ++cell) {
+    electron_temperature_ev[cell] = electronTemperatureEv(mean_energy_ev[cell]);
+  }
+}
+
 }  // namespace pemu::physics
