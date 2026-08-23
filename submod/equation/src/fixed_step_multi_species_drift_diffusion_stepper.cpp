@@ -1,5 +1,6 @@
 #include <pemu/discretization/operators/drift_velocity.hpp>
 #include <pemu/discretization/operators/electric_field.hpp>
+#include <pemu/discretization/operators/linear_boundary_flux.hpp>
 #include <pemu/equation/fixed_step_multi_species_drift_diffusion_stepper.hpp>
 #include <pemu/physics/charge_density.hpp>
 
@@ -36,10 +37,21 @@ void FixedStepMultiSpeciesDriftDiffusionStepper::buildTransportSteppers() {
           "current drift-diffusion solver supports charged species only");
     }
 
-    transport_steppers_[i] =
-        std::make_unique<FixedStepExplicitSpeciesContinuityStepper>(
-            *mesh_, drift_velocity_[id], properties.diffusivity, dt_,
-            species_bc_[i]);
+    if (wall_flux_assembler_.has_value()) {
+      const discretization::operators::LinearBoundaryFluxView wall_flux(
+          wall_flux_assembler_->activeFaces()[id],
+          wall_flux_assembler_->particleLossVelocity()[id],
+          wall_flux_assembler_->particleInwardFlux()[id]);
+      transport_steppers_[i] =
+          std::make_unique<FixedStepExplicitSpeciesContinuityStepper>(
+              *mesh_, drift_velocity_[id], properties.diffusivity, dt_,
+              species_bc_[i], wall_flux);
+    } else {
+      transport_steppers_[i] =
+          std::make_unique<FixedStepExplicitSpeciesContinuityStepper>(
+              *mesh_, drift_velocity_[id], properties.diffusivity, dt_,
+              species_bc_[i]);
+    }
   }
 }
 
@@ -88,6 +100,10 @@ FixedStepMultiSpeciesDriftDiffusionStepper::updateElectrostatics(
     discretization::operators::driftVelocityNormal(
         electric_field_normal_, properties.mobility, properties.polarity(),
         drift_velocity_[id]);
+  }
+
+  if (wall_flux_assembler_.has_value()) {
+    wall_flux_assembler_->evaluate(density);
   }
 
   electrostatics_ready_ = true;
@@ -177,7 +193,8 @@ FixedStepMultiSpeciesDriftDiffusionStepper::
         std::vector<boundary::BoundaryConditionSet> species_bc,
         std::unique_ptr<linalg::ISolver> poisson_backend,
         field::PlasmaFieldMetadata field_metadata,
-        std::optional<PureNeumannOptions> pure_neumann_options)
+        std::optional<PureNeumannOptions> pure_neumann_options,
+        physics::wall::WallBoundarySet wall_boundaries)
     : mesh_(&mesh),
       species_(&species),
       permittivity_(permittivity),
@@ -207,6 +224,9 @@ FixedStepMultiSpeciesDriftDiffusionStepper::
   if (species_bc_.size() != species.size()) {
     throw std::invalid_argument(
         "boundary condition count does not match species count");
+  }
+  if (!wall_boundaries.empty()) {
+    wall_flux_assembler_.emplace(mesh, species, std::move(wall_boundaries));
   }
   buildTransportSteppers();
 }

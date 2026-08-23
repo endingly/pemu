@@ -248,6 +248,9 @@
 | `ReactionKineticsTest.EvaluatesArbitraryThreeBodyMassActionRate` | 通用质量作用律正确组装三个空间密度因子。 |
 | `ReactionKineticsTest.AssemblerEvaluatesThreeBodyLawAndLeavesThirdBodySourceAbsent` | 三体 assembler 计算反应率，同时保持第三体净源为零。 |
 | `ReactionKineticsTest.AssemblerRejectsBinaryCoefficientUnitForThreeBodyLaw` | 三体反应拒绝错误的 `cm^3/s` 二体系数单位。 |
+| `WallFluxAssemblerTest.AssemblesPrimaryLossAndSecondaryParticleAndEnergyInflux` | 壁面组装器根据主损失通量同时生成二次粒子入流和发射能量入流。 |
+| `WallFluxAssemblerTest.RequiresEvaluationBeforeCompleteFluxQueries` | 首次组装前或失败刷新后拒绝完整通量查询，避免混用当前主损失和过期二次发射。 |
+| `WallFluxAssemblerTest.InvalidDensityLeavesPublishedInfluxUnchanged` | 非法密度导致壁面组装失败时，上一份已发布通量保持不变。 |
 | `SpeciesSetTest.AssignsDenseStableIds` | 物种 ID 稠密、稳定并可用于场数组索引。 |
 | `SpeciesFieldsTest.StoresIndependentFieldsPerSpecies` | 每个物种拥有互不串扰的独立场。 |
 
@@ -290,6 +293,13 @@
 | `AdaptiveTimeStepControllerTest.RejectsNoPositiveAdmissibleTimeStep` | 稳定性或正性限制为零时拒绝不存在正步长的推进。 |
 | `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.UsesConfiguredMaximumTimeStep` | 稳定性允许更大步长时，自适应推进器仍服从用户给定的 `max_dt`。 |
 | `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.FinalTimeStepEqualsRemainingTime` | 最后一步被截断为剩余时间，避免越过终止时刻。 |
+| `LinearBoundaryFluxTest.AggregatesSeveralWallFacesOnOneOwnerCell` | 同一控制体上的多个壁面损失按 $\sum_f v_fA_f/V$ 聚合。 |
+| `LinearBoundaryFluxTest.RejectsAggregateLossRateOverflow` | 单个壁面贡献均有限但控制体总损失率溢出时明确拒绝。 |
+| `LinearWallContinuityTest.WallFluxChangesIntegratedParticlesExactly` | 线性壁面通量引起的全域粒子变化严格等于边界面积积分。 |
+| `AdaptiveMultiSpeciesWallTransportTest.CouplesIonLossToSecondaryElectronFluxAndConservesFaceBalance` | 自适应多物种算子将离子壁面损失耦合为二次电子入流，并保持逐面收支。 |
+| `FixedMultiSpeciesWallTransportTest.UsesTheSameSecondaryEmissionFluxContract` | 固定步长路径复用同一二次发射通量契约。 |
+| `ElectronEnergyWallTest.AppliesIndependentEnergyLossAndSecondaryEmissionFlux` | 电子能量壁面使用独立损失速度并计入二次电子携带的能量。 |
+| `ElectronEnergyWallTest.WallLossContributesToPositivityLimit` | 壁面能量耗散进入显式 positivity timestep。 |
 
 ## 固定步长与自适应步长仿真（`submod/simulation/test/test_simulation.cpp`）
 
@@ -331,6 +341,8 @@
 | `AdaptiveStepPlasmaSimulationTest.ElectronEnergyDepletionLimitsTheCoupledTimeStep` | 强电子能量耗散会进入统一自适应步长 proposal，并在物种本身允许更大步长时收紧耦合步长、保持能量非负。 |
 | `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
+| `FixedStepWallSimulationTest.AdvancesParticleAndElectronEnergyWallFluxInOneAtomicWorkflow` | Simulation 在同一步中耦合提交壁面粒子损失、二次电子和电子能量通量。 |
+| `AdaptiveStepWallSimulationTest.AdvancesParticleAndElectronEnergyWallFluxInOneAtomicWorkflow` | 自适应 Simulation 复用相同壁面耦合，并把粒子与电子能量边界损失纳入统一步长和原子提交。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项/电子能量的运行期 metadata 传播，以及受物种与能量联合稳定性约束的多步推进、非负密度和电子相对离子向右漂移。电子能量源由同一 SG 粒子通量形成的电场功与 $15.76\,\mathrm{eV}$ 每次电离的附加损失共同组成，并逐单元验证有限且为正。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential、electric-field、电子能量密度、平均能量和非零能量源统计，能量复合单位稳定显示为 `eV/cm^3` 与 `eV/(cm^3*s)`。真实 `VtkHdfWriter` 将包括电子能量密度和平均能量在内的 step 0 至终态同步状态写入 `<build>/submod/simulation/output/parallel-plate-400v/parallel-plate-400v.vtkhdf`，测试再用官方 reader 校验时间步数与终态 step。 |
 | `PlasmaSimulation64x64CheckpointTest.ParallelPlate400VCheckpointRestoresAndContinuesSimulation` | 在关闭 dump/trace 的 $0/400\,\mathrm{V}$ 厘米网格固定步仿真中，由 simulation workflow 在第 3 步自动保存 checkpoint；新建 simulation 通过 `restoreCheckpoint()` 自动恢复物种密度、电子能量密度与 clock 后续跑至第 8 步，最终能量、density、电势、电荷和全部 face 电场/漂移速度与未中断运行逐项一致。 |

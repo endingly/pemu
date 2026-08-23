@@ -3,6 +3,7 @@
 #include <pemu/boundary/boundary_condition.hpp>
 #include <pemu/boundary/boundary_condition_set.hpp>
 #include <pemu/discretization/operators/bernoulli.hpp>
+#include <pemu/discretization/operators/linear_boundary_flux.hpp>
 #include <pemu/field/types.hpp>
 #include <pemu/field/utils.hpp>
 #include <pemu/mesh/geometry.hpp>
@@ -14,7 +15,9 @@
 #include <variant>
 
 namespace pemu::discretization::operators {
+namespace detail {
 
+/** @brief Implements SG transport with an optional linear boundary override. */
 template <field::CellFieldLike StateField, field::FaceFieldLike VelocityField,
           field::FaceFieldLike FluxField>
   requires std::same_as<typename StateField::value_type,
@@ -22,11 +25,10 @@ template <field::CellFieldLike StateField, field::FaceFieldLike VelocityField,
            std::same_as<typename StateField::value_type,
                         typename FluxField::value_type> &&
            std::floating_point<typename StateField::value_type>
-void scharfetterGummelFlux(const StateField& state,
-                           const VelocityField& normal_velocity,
-                           const double diffusivity,
-                           const boundary::BoundaryConditionSet& bc,
-                           FluxField& flux) {
+void scharfetterGummelFluxImpl(
+    const StateField& state, const VelocityField& normal_velocity,
+    const double diffusivity, const boundary::BoundaryConditionSet& bc,
+    const LinearBoundaryFluxView* linear_boundary_flux, FluxField& flux) {
   using Scalar = typename StateField::value_type;
 
   field::ensureSameMesh(state, normal_velocity);
@@ -40,6 +42,10 @@ void scharfetterGummelFlux(const StateField& state,
   }
 
   const auto& mesh = state.mesh();
+
+  if (linear_boundary_flux != nullptr) {
+    linear_boundary_flux->validate(state);
+  }
 
   for (mesh::FaceId face = 0; face < mesh.numFaces(); ++face) {
 
@@ -82,9 +88,14 @@ void scharfetterGummelFlux(const StateField& state,
     // ====================================================
     // Boundary face
     //
-    // First SG version deliberately supports only
-    // Dirichlet boundary states.
+    // Faces without a linear override use Dirichlet boundary states.
     // ====================================================
+
+    if (linear_boundary_flux != nullptr && linear_boundary_flux->active(face)) {
+      flux[face] =
+          static_cast<Scalar>(linear_boundary_flux->normalFlux(state, face));
+      continue;
+    }
 
     const auto boundary_id = mesh.boundaryId(face);
 
@@ -135,6 +146,43 @@ void scharfetterGummelFlux(const StateField& state,
     flux[face] = static_cast<Scalar>(
         diffusivity / distance * (bm * state[owner] - bp * dirichlet->value));
   }
+}
+
+}  // namespace detail
+
+/** @brief Computes SG flux with scalar boundary conditions only. */
+template <field::CellFieldLike StateField, field::FaceFieldLike VelocityField,
+          field::FaceFieldLike FluxField>
+  requires std::same_as<typename StateField::value_type,
+                        typename VelocityField::value_type> &&
+           std::same_as<typename StateField::value_type,
+                        typename FluxField::value_type> &&
+           std::floating_point<typename StateField::value_type>
+void scharfetterGummelFlux(const StateField& state,
+                           const VelocityField& normal_velocity,
+                           const double diffusivity,
+                           const boundary::BoundaryConditionSet& bc,
+                           FluxField& flux) {
+  detail::scharfetterGummelFluxImpl(state, normal_velocity, diffusivity, bc,
+                                    nullptr, flux);
+}
+
+/** @brief Computes SG interior flux and linear wall flux on selected faces. */
+template <field::CellFieldLike StateField, field::FaceFieldLike VelocityField,
+          field::FaceFieldLike FluxField>
+  requires std::same_as<typename StateField::value_type,
+                        typename VelocityField::value_type> &&
+           std::same_as<typename StateField::value_type,
+                        typename FluxField::value_type> &&
+           std::floating_point<typename StateField::value_type>
+void scharfetterGummelFlux(const StateField& state,
+                           const VelocityField& normal_velocity,
+                           const double diffusivity,
+                           const boundary::BoundaryConditionSet& bc,
+                           const LinearBoundaryFluxView& linear_boundary_flux,
+                           FluxField& flux) {
+  detail::scharfetterGummelFluxImpl(state, normal_velocity, diffusivity, bc,
+                                    &linear_boundary_flux, flux);
 }
 
 }  // namespace pemu::discretization::operators

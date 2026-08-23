@@ -18,6 +18,7 @@
 #include <pemu/physics/charge_density.hpp>
 
 #include <pemu/physics/species.hpp>
+#include <pemu/physics/wall/flux_assembler.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -51,7 +52,9 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
 
       field::PlasmaFieldMetadata field_metadata = {},
 
-      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt)
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt,
+
+      physics::wall::WallBoundarySet wall_boundaries = {})
 
       : mesh_(&mesh),
 
@@ -96,6 +99,11 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
       throw std::invalid_argument(
           "species BC count does not "
           "match SpeciesSet");
+    }
+
+    if (!wall_boundaries.empty()) {
+      wall_flux_assembler_.emplace(*mesh_, *species_,
+                                   std::move(wall_boundaries));
     }
 
     buildTransportSteppers();
@@ -187,6 +195,10 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
           electric_field_normal_, properties.mobility, properties.polarity(),
           drift_velocity_[id]);
     });
+
+    if (wall_flux_assembler_.has_value()) {
+      wall_flux_assembler_->evaluate(density);
+    }
 
     electrostatics_ready_ = true;
 
@@ -466,9 +478,9 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
   }
 
   /** @brief Computes one species' current SG particle flux without advancing. */
-  void computeParticleFluxNormal(
-      const physics::SpeciesCellFields& density, physics::SpeciesId id,
-      field::FaceField<double>& normal_flux) const {
+  void computeParticleFluxNormal(const physics::SpeciesCellFields& density,
+                                 physics::SpeciesId id,
+                                 field::FaceField<double>& normal_flux) const {
     validateFields(density);
     requireElectrostaticsReady();
     const auto* stepper = transportStepper(id);
@@ -497,6 +509,20 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
   [[nodiscard]]
   const field::PlasmaFieldMetadata& fieldMetadata() const noexcept {
     return field_metadata_;
+  }
+
+  /** @brief Reports whether plasma-wall flux assembly is configured. */
+  [[nodiscard]] bool hasWallFluxAssembler() const noexcept {
+    return wall_flux_assembler_.has_value();
+  }
+
+  /** @brief Returns current wall flux fields for coupled energy transport. */
+  [[nodiscard]] const physics::wall::WallFluxAssembler& wallFluxAssembler()
+      const {
+    if (!wall_flux_assembler_.has_value()) {
+      throw std::logic_error("plasma-wall flux assembly is not configured");
+    }
+    return *wall_flux_assembler_;
   }
 
  private:
@@ -531,10 +557,21 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
             "species only");
       }
 
-      transport_steppers_[id.value] =
-          std::make_unique<AdaptiveStepExplicitSpeciesContinuityStepper>(
-              *mesh_, drift_velocity_[id], properties.diffusivity,
-              species_bc_[id.value]);
+      if (wall_flux_assembler_.has_value()) {
+        const discretization::operators::LinearBoundaryFluxView wall_flux(
+            wall_flux_assembler_->activeFaces()[id],
+            wall_flux_assembler_->particleLossVelocity()[id],
+            wall_flux_assembler_->particleInwardFlux()[id]);
+        transport_steppers_[id.value] =
+            std::make_unique<AdaptiveStepExplicitSpeciesContinuityStepper>(
+                *mesh_, drift_velocity_[id], properties.diffusivity,
+                species_bc_[id.value], wall_flux);
+      } else {
+        transport_steppers_[id.value] =
+            std::make_unique<AdaptiveStepExplicitSpeciesContinuityStepper>(
+                *mesh_, drift_velocity_[id], properties.diffusivity,
+                species_bc_[id.value]);
+      }
     });
   }
 
@@ -618,6 +655,8 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
   // --------------------------------------------------------
 
   physics::SpeciesFaceFields drift_velocity_;
+
+  std::optional<physics::wall::WallFluxAssembler> wall_flux_assembler_;
 
   physics::SpeciesCellFields transport_loss_rate_;
 

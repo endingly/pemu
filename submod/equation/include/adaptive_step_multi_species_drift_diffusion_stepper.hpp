@@ -9,6 +9,7 @@
 #include <pemu/equation/time_integration/adaptive_time_step_controller.hpp>
 #include <pemu/field/plasma_field_metadata.hpp>
 #include <pemu/linalg/i_solver.hpp>
+#include <pemu/physics/wall/types.hpp>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -37,12 +38,15 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
 
       field::PlasmaFieldMetadata field_metadata = {},
 
-      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt)
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt,
+
+      physics::wall::WallBoundarySet wall_boundaries = {})
 
       : transport_operator_(
             mesh, species, permittivity, std::move(potential_bc),
             std::move(species_bc), std::move(poisson_backend),
-            std::move(field_metadata), std::move(pure_neumann_options)),
+            std::move(field_metadata), std::move(pure_neumann_options),
+            std::move(wall_boundaries)),
 
         controller_(time_step_config) {}
 
@@ -84,8 +88,7 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
   time_integration::TimeStepProposal proposeTimeStep(
       const physics::SpeciesCellFields& density,
       const physics::SpeciesCellFields& source, double remaining_time,
-      double coupled_transport_limit =
-          std::numeric_limits<double>::infinity(),
+      double coupled_transport_limit = std::numeric_limits<double>::infinity(),
       double coupled_positivity_limit =
           std::numeric_limits<double>::infinity()) {
     const double transport_limit =
@@ -104,10 +107,9 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
    * @brief Advances species with a proposal already selected for all coupled
    * equations and records it as adaptive history.
    */
-  void advancePrepared(
-      physics::SpeciesCellFields& density,
-      const physics::SpeciesCellFields& source,
-      const time_integration::TimeStepProposal& proposal) {
+  void advancePrepared(physics::SpeciesCellFields& density,
+                       const physics::SpeciesCellFields& source,
+                       const time_integration::TimeStepProposal& proposal) {
     if (!std::isfinite(proposal.dt) || proposal.dt <= 0.0) {
       throw std::invalid_argument(
           "prepared adaptive timestep must be finite and positive");
@@ -237,9 +239,9 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
   }
 
   /** @brief Computes one species' current SG particle flux without advancing. */
-  void computeParticleFluxNormal(
-      const physics::SpeciesCellFields& density, physics::SpeciesId id,
-      field::FaceField<double>& normal_flux) const {
+  void computeParticleFluxNormal(const physics::SpeciesCellFields& density,
+                                 physics::SpeciesId id,
+                                 field::FaceField<double>& normal_flux) const {
     transport_operator_.computeParticleFluxNormal(density, id, normal_flux);
   }
 
@@ -261,6 +263,17 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
   [[nodiscard]]
   const mesh::IMesh& mesh() const noexcept {
     return transport_operator_.mesh();
+  }
+
+  /** @brief Reports whether plasma-wall particle flux is configured. */
+  [[nodiscard]] bool hasWallFluxAssembler() const noexcept {
+    return transport_operator_.hasWallFluxAssembler();
+  }
+
+  /** @brief Returns current wall fields for electron-energy coupling. */
+  [[nodiscard]] const physics::wall::WallFluxAssembler& wallFluxAssembler()
+      const {
+    return transport_operator_.wallFluxAssembler();
   }
 
  private:

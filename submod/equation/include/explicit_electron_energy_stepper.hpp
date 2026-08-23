@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pemu/boundary/boundary_condition_set.hpp>
+#include <pemu/discretization/operators/linear_boundary_flux.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
 #include <pemu/mesh/i_mesh.hpp>
@@ -34,6 +35,15 @@ class ExplicitElectronEnergyStepper {
       const field::FaceField<double>& electron_normal_drift_velocity,
       double electron_diffusivity,
       boundary::BoundaryConditionSet energy_boundary_conditions,
+      double energy_transport_factor = maxwellian_transport_factor);
+
+  /** @brief Creates energy transport with linear wall flux on selected faces. */
+  ExplicitElectronEnergyStepper(
+      const mesh::IMesh& mesh,
+      const field::FaceField<double>& electron_normal_drift_velocity,
+      double electron_diffusivity,
+      boundary::BoundaryConditionSet energy_boundary_conditions,
+      discretization::operators::LinearBoundaryFluxView wall_flux,
       double energy_transport_factor = maxwellian_transport_factor);
 
   /** @brief Releases the private transport workspace. */

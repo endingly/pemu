@@ -141,6 +141,18 @@ struct ElectronEnergySubsystem {
       throw std::invalid_argument(
           "electron density floor must be finite and non-negative");
     }
+    if (transport.hasWallFluxAssembler()) {
+      const auto& wall = transport.wallFluxAssembler();
+      const discretization::operators::LinearBoundaryFluxView wall_energy_flux(
+          wall.activeFaces()[configuration.electron],
+          wall.energyLossVelocity()[configuration.electron],
+          wall.energyInwardFlux()[configuration.electron]);
+      return equation::ExplicitElectronEnergyStepper(
+          transport.mesh(),
+          transport.driftVelocityNormal(configuration.electron),
+          properties.diffusivity, configuration.boundary_conditions,
+          wall_energy_flux, configuration.transport_factor);
+    }
     return equation::ExplicitElectronEnergyStepper(
         transport.mesh(), transport.driftVelocityNormal(configuration.electron),
         properties.diffusivity, configuration.boundary_conditions,

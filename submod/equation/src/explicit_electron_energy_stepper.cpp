@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,8 +20,9 @@ struct ExplicitElectronEnergyStepper::Impl {
   double energy_transport_factor;
   double energy_diffusivity;
   boundary::BoundaryConditionSet energy_boundary_conditions;
+  std::optional<discretization::operators::LinearBoundaryFluxView> wall_flux;
   field::FaceField<double> energy_normal_drift_velocity;
-  AdaptiveStepExplicitSpeciesContinuityStepper transport;
+  std::unique_ptr<AdaptiveStepExplicitSpeciesContinuityStepper> transport;
   field::CellField<double> transport_loss_rate;
   field::CellField<double> increment;
 
@@ -46,29 +48,48 @@ struct ExplicitElectronEnergyStepper::Impl {
   Impl(const mesh::IMesh& mesh_in,
        const field::FaceField<double>& electron_velocity,
        double electron_diffusivity,
-       boundary::BoundaryConditionSet boundary_conditions, double factor)
+       boundary::BoundaryConditionSet boundary_conditions, double factor,
+       std::optional<discretization::operators::LinearBoundaryFluxView>
+           wall_flux_in)
       : mesh(&mesh_in),
         electron_normal_drift_velocity(&electron_velocity),
         energy_transport_factor(factor),
         energy_diffusivity(
             validatedEnergyDiffusivity(electron_diffusivity, factor)),
         energy_boundary_conditions(std::move(boundary_conditions)),
+        wall_flux(std::move(wall_flux_in)),
         energy_normal_drift_velocity(mesh_in, 0.0),
-        transport(mesh_in, energy_normal_drift_velocity, energy_diffusivity,
-                  energy_boundary_conditions),
         transport_loss_rate(mesh_in, 0.0),
         increment(mesh_in, 0.0) {
     if (&electron_velocity.mesh() != &mesh_in) {
       throw std::invalid_argument(
           "electron drift velocity belongs to another mesh");
     }
+    if (wall_flux.has_value() && &wall_flux->mesh() != &mesh_in) {
+      throw std::invalid_argument(
+          "electron energy wall flux belongs to another mesh");
+    }
     validateBoundaryConditions();
+    if (wall_flux.has_value()) {
+      transport =
+          std::make_unique<AdaptiveStepExplicitSpeciesContinuityStepper>(
+              mesh_in, energy_normal_drift_velocity, energy_diffusivity,
+              energy_boundary_conditions, *wall_flux);
+    } else {
+      transport =
+          std::make_unique<AdaptiveStepExplicitSpeciesContinuityStepper>(
+              mesh_in, energy_normal_drift_velocity, energy_diffusivity,
+              energy_boundary_conditions);
+    }
   }
 
   /** @brief Requires finite non-negative Dirichlet energy on every boundary. */
   void validateBoundaryConditions() const {
     for (mesh::FaceId face = 0; face < mesh->numFaces(); ++face) {
       if (!mesh->isBoundary(face)) {
+        continue;
+      }
+      if (wall_flux.has_value() && wall_flux->active(face)) {
         continue;
       }
       const auto boundary_id = mesh->boundaryId(face);
@@ -138,7 +159,7 @@ struct ExplicitElectronEnergyStepper::Impl {
   /** @brief Refreshes and validates all SG diagonal loss coefficients. */
   void updateTransportLossRate() {
     updateEnergyDriftVelocity();
-    transport.computeTransportLossRate(transport_loss_rate);
+    transport->computeTransportLossRate(transport_loss_rate);
     for (const double loss_rate : transport_loss_rate) {
       if (!std::isfinite(loss_rate) || loss_rate < 0.0) {
         throw std::runtime_error(
@@ -199,7 +220,7 @@ struct ExplicitElectronEnergyStepper::Impl {
       throw std::invalid_argument("electron energy time step must be positive");
     }
     updateEnergyDriftVelocity();
-    transport.computeIncrement(energy_density, source, dt, increment);
+    transport->computeIncrement(energy_density, source, dt, increment);
     for (const double value : increment) {
       if (!std::isfinite(value)) {
         throw std::runtime_error("electron energy increment is not finite");
@@ -215,9 +236,23 @@ ExplicitElectronEnergyStepper::ExplicitElectronEnergyStepper(
     double electron_diffusivity,
     boundary::BoundaryConditionSet energy_boundary_conditions,
     double energy_transport_factor)
-    : impl_(std::make_unique<Impl>(
-          mesh, electron_normal_drift_velocity, electron_diffusivity,
-          std::move(energy_boundary_conditions), energy_transport_factor)) {}
+    : impl_(std::make_unique<Impl>(mesh, electron_normal_drift_velocity,
+                                   electron_diffusivity,
+                                   std::move(energy_boundary_conditions),
+                                   energy_transport_factor, std::nullopt)) {}
+
+/** @copydoc ExplicitElectronEnergyStepper::ExplicitElectronEnergyStepper */
+ExplicitElectronEnergyStepper::ExplicitElectronEnergyStepper(
+    const mesh::IMesh& mesh,
+    const field::FaceField<double>& electron_normal_drift_velocity,
+    double electron_diffusivity,
+    boundary::BoundaryConditionSet energy_boundary_conditions,
+    discretization::operators::LinearBoundaryFluxView wall_flux,
+    double energy_transport_factor)
+    : impl_(std::make_unique<Impl>(mesh, electron_normal_drift_velocity,
+                                   electron_diffusivity,
+                                   std::move(energy_boundary_conditions),
+                                   energy_transport_factor, wall_flux)) {}
 
 /** @copydoc ExplicitElectronEnergyStepper::~ExplicitElectronEnergyStepper */
 ExplicitElectronEnergyStepper::~ExplicitElectronEnergyStepper() = default;

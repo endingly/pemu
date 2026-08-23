@@ -6,9 +6,11 @@
 #include <pemu/field/plasma_field_metadata.hpp>
 #include <pemu/mesh/i_mesh.hpp>
 #include <pemu/physics/species.hpp>
+#include <pemu/physics/wall/flux_assembler.hpp>
 
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace pemu::equation {
@@ -27,9 +29,20 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
       std::vector<boundary::BoundaryConditionSet> species_bc,
       std::unique_ptr<linalg::ISolver> poisson_backend,
       field::PlasmaFieldMetadata field_metadata = {},
-      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt);
+      std::optional<PureNeumannOptions> pure_neumann_options = std::nullopt,
+      physics::wall::WallBoundarySet wall_boundaries = {});
 
-  void buildTransportSteppers();
+  FixedStepMultiSpeciesDriftDiffusionStepper(
+      const FixedStepMultiSpeciesDriftDiffusionStepper&) = delete;
+  FixedStepMultiSpeciesDriftDiffusionStepper& operator=(
+      const FixedStepMultiSpeciesDriftDiffusionStepper&) = delete;
+
+  // Poisson and wall views retain addresses of this object's member fields.
+  // Moving the aggregate would leave those non-owning references dangling.
+  FixedStepMultiSpeciesDriftDiffusionStepper(
+      FixedStepMultiSpeciesDriftDiffusionStepper&&) = delete;
+  FixedStepMultiSpeciesDriftDiffusionStepper& operator=(
+      FixedStepMultiSpeciesDriftDiffusionStepper&&) = delete;
 
   [[nodiscard]] linalg::SolverResult updateElectrostatics(
       const physics::SpeciesCellFields& density);
@@ -75,6 +88,20 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
 
   [[nodiscard]] const mesh::IMesh& mesh() const noexcept { return *mesh_; }
 
+  /** @brief Reports whether plasma-wall particle flux is configured. */
+  [[nodiscard]] bool hasWallFluxAssembler() const noexcept {
+    return wall_flux_assembler_.has_value();
+  }
+
+  /** @brief Returns current wall fields for electron-energy coupling. */
+  [[nodiscard]] const physics::wall::WallFluxAssembler& wallFluxAssembler()
+      const {
+    if (!wall_flux_assembler_.has_value()) {
+      throw std::logic_error("plasma-wall flux assembly is not configured");
+    }
+    return *wall_flux_assembler_;
+  }
+
   [[nodiscard]] double transportCfl(physics::SpeciesId id) const {
     auto _ = species_->at(id);
     const auto index = static_cast<std::size_t>(id.value);
@@ -91,6 +118,9 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
   static std::unique_ptr<linalg::ISolver> validateBackend(
       std::unique_ptr<linalg::ISolver> backend);
 
+  /** @brief Builds the private per-species steppers and binds wall views. */
+  void buildTransportSteppers();
+
   void validateFields(const physics::SpeciesCellFields& density) const;
 
   const mesh::IMesh* mesh_;
@@ -104,6 +134,7 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
   field::CellField<double> potential_;
   field::FaceField<double> electric_field_normal_;
   physics::SpeciesFaceFields drift_velocity_;
+  std::optional<physics::wall::WallFluxAssembler> wall_flux_assembler_;
   physics::SpeciesCellFields increments_;
   equation::PoissonSolver poisson_solver_;
   std::vector<std::unique_ptr<FixedStepExplicitSpeciesContinuityStepper>>

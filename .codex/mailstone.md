@@ -43,7 +43,13 @@ M14 E/N / Te dependent chemistry        ✅
     M14.3 cell-local reaction-rate assembly ✅
     M14.4 numerical tests / document    ✅
     M14.5 Simulation integration        ✅
-M15 Plasma wall / electrode BC
+M15 Plasma wall / electrode BC             ✅
+    M15.1 wall particle/energy flux contract ✅
+    M15.2 secondary-emission flux assembly ✅
+    M15.3 continuity-equation wall discretization ✅
+    M15.4 electron-energy wall discretization ✅
+    M15.5 numerical tests / document      ✅
+    M15.6 Simulation integration          ✅
 
 
 Phase IV — Validation

@@ -5,6 +5,7 @@
 
 #include <pemu/discretization/operators/bernoulli.hpp>
 #include <pemu/discretization/operators/divergence.hpp>
+#include <pemu/discretization/operators/linear_boundary_flux.hpp>
 #include <pemu/discretization/operators/scharfetter_gummel_flux.hpp>
 
 #include <pemu/field/cell_field.hpp>
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <variant>
 
@@ -33,7 +35,8 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
         diffusivity_(diffusivity),
         flux_(mesh, 0.0),
         divergence_(mesh, 0.0),
-        local_increment_(mesh, 0.0) {
+        local_increment_(mesh, 0.0),
+        wall_loss_rate_(mesh, 0.0) {
     if (&normal_drift_velocity.mesh() != &mesh) {
       throw std::invalid_argument("drift velocity belongs to another mesh");
     }
@@ -41,6 +44,20 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
     if (diffusivity <= 0.0) {
       throw std::invalid_argument("diffusivity must be positive");
     }
+  }
+
+  /** @brief Creates an SG stepper with linear wall flux on selected faces. */
+  AdaptiveStepExplicitSpeciesContinuityStepper(
+      const mesh::IMesh& mesh,
+      const field::FaceField<double>& normal_drift_velocity, double diffusivity,
+      const boundary::BoundaryConditionSet& bc,
+      discretization::operators::LinearBoundaryFluxView wall_flux)
+      : AdaptiveStepExplicitSpeciesContinuityStepper(
+            mesh, normal_drift_velocity, diffusivity, bc) {
+    if (&wall_flux.mesh() != &mesh) {
+      throw std::invalid_argument("wall flux belongs to another mesh");
+    }
+    wall_flux_.emplace(wall_flux);
   }
 
   [[nodiscard]]
@@ -60,8 +77,14 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
     if (&normal_flux.mesh() != mesh_) {
       throw std::invalid_argument("normal flux belongs to another mesh");
     }
-    discretization::operators::scharfetterGummelFlux(
-        density, *normal_drift_velocity_, diffusivity_, *bc_, normal_flux);
+    if (wall_flux_.has_value()) {
+      discretization::operators::scharfetterGummelFlux(
+          density, *normal_drift_velocity_, diffusivity_, *bc_, *wall_flux_,
+          normal_flux);
+    } else {
+      discretization::operators::scharfetterGummelFlux(
+          density, *normal_drift_velocity_, diffusivity_, *bc_, normal_flux);
+    }
   }
 
   // ========================================================
@@ -146,6 +169,10 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
       // Boundary face
       // =================================================
 
+      if (wall_flux_.has_value() && wall_flux_->active(face)) {
+        continue;
+      }
+
       const auto boundary_id = mesh_->boundaryId(face);
 
       if (boundary_id == mesh::invalid_boundary) {
@@ -185,6 +212,19 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
 
       loss_rate[owner] += scale * discretization::operators::bernoulli(-pe) /
                           mesh_->cellVolume(owner);
+    }
+    if (wall_flux_.has_value()) {
+      discretization::operators::computeLinearBoundaryLossRate(*wall_flux_,
+                                                               wall_loss_rate_);
+      // Validate every merged value before publishing any wall contribution.
+      for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+        if (!std::isfinite(loss_rate[cell] + wall_loss_rate_[cell])) {
+          throw std::overflow_error("transport loss rate overflowed");
+        }
+      }
+      for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+        loss_rate[cell] += wall_loss_rate_[cell];
+      }
     }
   }
 
@@ -265,6 +305,8 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
 
   const boundary::BoundaryConditionSet* bc_;
 
+  std::optional<discretization::operators::LinearBoundaryFluxView> wall_flux_;
+
   double diffusivity_;
 
   field::FaceField<double> flux_;
@@ -272,6 +314,8 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
   field::CellField<double> divergence_;
 
   field::CellField<double> local_increment_;
+
+  mutable field::CellField<double> wall_loss_rate_;
 };
 
 }  // namespace pemu::equation

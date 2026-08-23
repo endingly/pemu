@@ -3,6 +3,7 @@
 #include <pemu/boundary/boundary_condition_set.hpp>
 #include <pemu/discretization/operators/bernoulli.hpp>
 #include <pemu/discretization/operators/divergence.hpp>
+#include <pemu/discretization/operators/linear_boundary_flux.hpp>
 #include <pemu/discretization/operators/scharfetter_gummel_flux.hpp>
 #include <pemu/field/cell_field.hpp>
 #include <pemu/field/face_field.hpp>
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 
 namespace pemu::equation {
@@ -30,7 +32,8 @@ class FixedStepExplicitSpeciesContinuityStepper {
         dt_(dt),
         flux_(mesh, 0.0),
         divergence_(mesh, 0.0),
-        increment_(mesh, 0.0) {
+        increment_(mesh, 0.0),
+        wall_loss_rate_(mesh, 0.0) {
     if (&normal_drift_velocity.mesh() != &mesh) {
       throw std::invalid_argument("drift velocity belongs to another mesh");
     }
@@ -42,8 +45,23 @@ class FixedStepExplicitSpeciesContinuityStepper {
     }
   }
 
+  /** @brief Creates fixed SG transport with linear flux on wall faces. */
+  FixedStepExplicitSpeciesContinuityStepper(
+      const mesh::IMesh& mesh,
+      const field::FaceField<double>& normal_drift_velocity, double diffusivity,
+      double dt, const boundary::BoundaryConditionSet& bc,
+      discretization::operators::LinearBoundaryFluxView wall_flux)
+      : FixedStepExplicitSpeciesContinuityStepper(mesh, normal_drift_velocity,
+                                                  diffusivity, dt, bc) {
+    if (&wall_flux.mesh() != &mesh) {
+      throw std::invalid_argument("wall flux belongs to another mesh");
+    }
+    wall_flux_.emplace(wall_flux);
+  }
+
   [[nodiscard]] double maxTransportCfl() const {
     field::CellField<double> diagonal(*mesh_, 0.0);
+    wall_loss_rate_.fill(0.0);
 
     for (mesh::FaceId face = 0; face < mesh_->numFaces(); ++face) {
       const auto owner = mesh_->owner(face);
@@ -64,6 +82,10 @@ class FixedStepExplicitSpeciesContinuityStepper {
         continue;
       }
 
+      if (wall_flux_.has_value() && wall_flux_->active(face)) {
+        continue;
+      }
+
       const double distance =
           mesh::dot(mesh_->faceCenter(face) - mesh_->cellCenter(owner), normal);
       if (distance <= 0.0) {
@@ -74,9 +96,15 @@ class FixedStepExplicitSpeciesContinuityStepper {
       diagonal[owner] += scale * discretization::operators::bernoulli(-pe);
     }
 
+    if (wall_flux_.has_value()) {
+      discretization::operators::computeLinearBoundaryLossRate(*wall_flux_,
+                                                               wall_loss_rate_);
+    }
+
     double maximum = 0.0;
     for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
-      const double local = dt_ * diagonal[cell] / mesh_->cellVolume(cell);
+      const double local = dt_ * (diagonal[cell] / mesh_->cellVolume(cell) +
+                                  wall_loss_rate_[cell]);
       maximum = std::max(maximum, local);
     }
     return maximum;
@@ -95,8 +123,14 @@ class FixedStepExplicitSpeciesContinuityStepper {
     if (&normal_flux.mesh() != mesh_) {
       throw std::invalid_argument("normal flux belongs to another mesh");
     }
-    discretization::operators::scharfetterGummelFlux(
-        density, *normal_drift_velocity_, diffusivity_, *bc_, normal_flux);
+    if (wall_flux_.has_value()) {
+      discretization::operators::scharfetterGummelFlux(
+          density, *normal_drift_velocity_, diffusivity_, *bc_, *wall_flux_,
+          normal_flux);
+    } else {
+      discretization::operators::scharfetterGummelFlux(
+          density, *normal_drift_velocity_, diffusivity_, *bc_, normal_flux);
+    }
   }
 
   /** @brief Computes one fixed-step increment without changing density. */
@@ -160,11 +194,13 @@ class FixedStepExplicitSpeciesContinuityStepper {
   const mesh::IMesh* mesh_;
   const field::FaceField<double>* normal_drift_velocity_;
   const boundary::BoundaryConditionSet* bc_;
+  std::optional<discretization::operators::LinearBoundaryFluxView> wall_flux_;
   double diffusivity_;
   double dt_;
   field::FaceField<double> flux_;
   field::CellField<double> divergence_;
   field::CellField<double> increment_;
+  mutable field::CellField<double> wall_loss_rate_;
 };
 
 }  // namespace pemu::equation

@@ -74,8 +74,9 @@ $$
 由于 $v_w$ 与 $D_w$ 同乘 closure factor，面 Péclet 数保持与电子粒子输运一致，而整个
 能量通量乘以该 factor。
 
-边界暂时只接受有限、非负的能量密度 Dirichlet 值。真实电子壁面损失、反射和二次电子
-发射需要独立边界模型，将在 M15 处理。
+普通边界接受有限、非负的能量密度 Dirichlet 值。M15 壁面可以改用线性法向通量
+$\Gamma_w\cdot n=v_{w,\mathrm{loss}}w-Q_{\mathrm{in}}$；能量损失速度独立于粒子损失速度，
+二次电子携带的能量由 wall assembler 根据入射粒子通量、产额和发射平均能量组装。
 
 离散散度为
 
@@ -159,9 +160,11 @@ dump 会同步写出 `electron_energy_density` 和 `electron_mean_energy`。chec
 - SG 两点通量沿用现有正交/近正交网格假设；
 - 碰撞损失仍由调用者的附加源 evaluator 给出，尚无反应类型到能损的通用数据库；
 - 电场功与连续性更新调用同一 SG 通量实现，但当前分别求值，尚未缓存全部物种面通量；
-- 尚无 wall/electrode 能量边界条件。
+- 当前 wall closure 使用调用者提供的有效粒子/能量损失速度；尚未内置能量相关反射、
+  thermionic emission、field emission 或 dielectric surface-charge 方程。
 
-这些限制保持了 M13、M14、M15 和后续 Simulation 集成之间的清晰边界。
+壁面模型、离散算子和 Simulation 生命周期仍保持单向依赖，具体数值方法见
+[`plasma-wall-boundary.md`](plasma-wall-boundary.md)。
 
 ## 7. 参考模型
 
