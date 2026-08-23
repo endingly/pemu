@@ -25,12 +25,18 @@ M11 Diagnostics / Observability         ✅
     M11.8 structured logging ✅
     M11.9 failure diagnostics ✅
 
-M12 Output / checkpoint                 ← NOW
+M12 Output / checkpoint                 ✅
 
 
 Phase III — Better Plasma Physics
 ────────────────────────────────────
-M13 Electron energy equation
+M13 Electron energy equation            ← NOW
+    M13.1 energy quantities / metadata  ✅
+    M13.2 mean-energy conversion        ✅
+    M13.3 SG energy transport           ✅
+    M13.4 explicit CFL / positivity     ✅
+    M13.5 numerical tests / document    ✅
+    M13.6 Simulation integration        ✅
 M14 E/N / Te dependent chemistry
 M15 Plasma wall / electrode BC
 

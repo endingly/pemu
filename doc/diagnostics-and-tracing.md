@@ -216,6 +216,9 @@ STATISTICS | STEP=2 | TIME=0.04 [s]
 FIELD                          | UNIT             | MIN | MAX | MEAN | RMS | INTEGRAL
 species[e]                     | 1/mL             | ... | ... |  ... | ... | ... [1]
 potential                      | V                | ... | ... |  ... | ... | ... [mV*L]
+electron_energy_density        | eV/cm^3          | ... | ... |  ... | ... | ... [eV]
+electron_mean_energy           | eV               | ... | ... |  ... | ... | ...
+electron_energy_source         | eV/(cm^3*s)      | ... | ... |  ... | ... | ... [eV/s]
 ```
 
 当前事件顺序如下：
@@ -235,12 +238,15 @@ potential                      | V                | ... | ... |  ... | ... | ...
 | `physics.charge.statistics` | 输运更新前 | 空间电荷极值、净电荷、绝对电荷及相对不平衡度 |
 | `field.potential.statistics` | 输运更新前 | 电势极值、体积均值、RMS |
 | `field.electric_field_normal.statistics` | 输运更新前 | 面法向电场极值、最大绝对值、面积均值、RMS |
-| `timestep.selected` | 自适应推进完成步长选择与状态更新后 | `dt`、输运/正性/稳定性限制 |
+| `physics.electron_energy_density.statistics` | 输运更新前 | 电子能量密度极值、体积均值、总能量、RMS |
+| `physics.electron_mean_energy.statistics` | 输运更新前 | 平均电子能量极值、体积均值、RMS |
+| `physics.electron_energy_source.statistics` | 输运更新前 | 能量源项极值、体积均值、总体积积分、RMS |
+| `timestep.selected` | 自适应推进完成步长选择后、状态更新前 | `dt`、输运/正性/稳定性限制 |
 | `step.completed` | 状态更新成功且时钟提交后 | 新 `step`、新 `time`、实际 `dt`、相对残差 |
 | `run.completed` | 时钟到达终止条件后 | `step`、`time`、`end_time` |
 | `run.failed` | `advance()` 返回失败或 workflow 任务抛出异常后 | `step`、`time`、`end_time` |
 
-这里需要特别注意时间层：四类 statistics 事件位于电静力、反应率和源项均完成之后，
+这里需要特别注意时间层：全部 statistics 事件位于电静力、反应率和物种/电子能量源项均完成之后，
 但在输运更新之前，因此全部描述同一个 $k$ 层状态。`step.completed` 中的密度已经是
 $n^{k+1}$，而电势、电场、反应率和源项仍是用于本次推进的 $k$ 层工作量。
 
@@ -283,18 +289,21 @@ species 的 `total_number` 是数密度的体积积分；charge 的 `net_charge`
 mean 与 RMS 使用 $[u]$，权重和使用 $[w]$，integral 与 $L^1$ integral 使用
 $[u][w]$。单位只在统计器收尾和 trace 事件组装阶段附加并相乘；遍历 cell/face 的热循环
 仍只接收 `double value, double weight`。启用统计时，simulation 构造函数还会验证数密度、
-电荷密度、电势和法向电场都具有期望的 `QuantityKind`，缺失或错误 metadata 会立即拒绝。
+电荷密度、电势、法向电场、电子能量密度、平均电子能量和电子能量源都具有期望的
+`QuantityKind`，缺失或错误 metadata 会立即拒绝。
 
 `TraceAttribute` 可附带 `precise_unit`。统计表的 `UNIT` 是 MIN/MAX/MEAN/RMS 的字段
 单位，`INTEGRAL` 单元格单独携带积分单位，例如 `potential | V | ... | 200 [mV*L]`。
-LLNL Units 可以把等价单位规范化显示，例如 `cm^3` 显示成 `mL`；无量纲量统一显示为
-`[1]`。
+LLNL Units 可以把等价单位规范化显示，例如 `cm^3` 显示成 `mL`。项目级
+`pemu::to_string(precise_unit)` 对需要保持领域惯例的复合单位提供稳定拼写，例如
+`eV/cm^3`、`eV/(cm^3*s)` 和 `eV/s`；其他单位仍委托 LLNL formatter。无量纲量统一显示
+为 `[1]`。
 
 所有统计事件均标记为 `Statistics` 输出通道。正常统计作为 `Debug/Trace` 事件输出；物种
 密度出现负值时升级为 `Warning/Diagnostic`，任意场出现 NaN、无穷值、非法物理权重或
 无有效统计量时升级为 `Error/Diagnostic`。后两者的 diagnostic 语义不改变其统计文件归属。
 
-统计扫描的成本为每个采样步 $O(N_sN_c+N_f)$，因此默认关闭。启用后可用
+统计扫描的成本为每个采样步 $O((N_s+3)N_c+N_f)$，因此默认关闭。启用后可用
 `sample_every_steps` 独立控制采样频率。模板化的 generic 调用方使用 `NullTraceSink` 时
 可由编译器完全消除 sink 调用；非模板 simulation façade 的空 `AnyTraceSink` 仍会构造
 少量栈上事件，但不会分配或执行 I/O。

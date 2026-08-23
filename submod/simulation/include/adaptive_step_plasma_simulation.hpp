@@ -6,6 +6,7 @@
 #include <pemu/physics/species.hpp>
 #include <pemu/simulation/adaptive_time_clock.hpp>
 #include <pemu/simulation/checkpoint.hpp>
+#include <pemu/simulation/electron_energy.hpp>
 #include <pemu/simulation/field_output.hpp>
 #include <pemu/simulation/plasma_reaction_rate_evaluator.hpp>
 #include <pemu/simulation/simulation_state.hpp>
@@ -28,6 +29,7 @@ class AdaptiveStepPlasmaSimulation {
                                const physics::ReactionNetwork& reaction_network,
                                Stepper& transport_stepper,
                                PlasmaReactionRateEvaluator rate_evaluator,
+                               ElectronEnergyConfiguration electron_energy,
                                AdaptiveTimeClock clock,
                                trace::AnyTraceSink trace_sink = {},
                                trace::StatisticsOptions statistics_options = {},
@@ -57,6 +59,18 @@ class AdaptiveStepPlasmaSimulation {
   [[nodiscard]] double lastTimeStep() const noexcept;
   [[nodiscard]] bool hasLastTimeStepProposal() const noexcept;
   [[nodiscard]] const TimeStepProposal& lastTimeStepProposal() const;
+
+  /** @brief Returns the electron energy-density state advanced in place. */
+  [[nodiscard]] const field::CellField<double>& electronEnergyDensity()
+      const noexcept;
+
+  /** @brief Returns the current density-derived mean electron energy. */
+  [[nodiscard]] const field::CellField<double>& electronMeanEnergy()
+      const noexcept;
+
+  /** @brief Returns the most recently assembled total electron-energy source. */
+  [[nodiscard]] const field::CellField<double>& electronEnergySource()
+      const noexcept;
 
   [[nodiscard]] output::OutputRecord saveCheckpoint() const;
   [[nodiscard]] output::OutputRecord saveCheckpoint(

@@ -15,7 +15,7 @@ inline constexpr std::string_view plasma_checkpoint_schema_key =
     "plasma_workflow_schema_version";
 inline constexpr std::string_view plasma_checkpoint_kind_key =
     "plasma_workflow_kind";
-inline constexpr double plasma_checkpoint_schema_version = 1.0;
+inline constexpr double plasma_checkpoint_schema_version = 2.0;
 inline constexpr double fixed_step_checkpoint_kind = 1.0;
 inline constexpr double adaptive_step_checkpoint_kind = 2.0;
 
@@ -34,6 +34,13 @@ inline constexpr double adaptive_step_checkpoint_kind = 2.0;
     physics::SpeciesId id, std::string_view species_name) {
   return "species_" + std::to_string(id.value) + "_name_" +
          checkpointHexToken(species_name) + "_number_density";
+}
+
+/** @brief Builds the restart key that binds energy to one electron species. */
+[[nodiscard]] inline std::string electronEnergyDensityCheckpointKey(
+    physics::SpeciesId id, std::string_view species_name) {
+  return "electron_species_" + std::to_string(id.value) + "_name_" +
+         checkpointHexToken(species_name) + "_energy_density";
 }
 
 [[nodiscard]] inline std::vector<output::checkpoint::CellFieldSource>

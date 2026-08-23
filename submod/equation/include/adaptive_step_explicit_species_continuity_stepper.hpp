@@ -53,6 +53,17 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
     return diffusivity_;
   }
 
+  /** @brief Computes the SG particle flux used by the continuity update. */
+  void computeNormalFlux(const field::CellField<double>& density,
+                         field::FaceField<double>& normal_flux) const {
+    validateField(density);
+    if (&normal_flux.mesh() != mesh_) {
+      throw std::invalid_argument("normal flux belongs to another mesh");
+    }
+    discretization::operators::scharfetterGummelFlux(
+        density, *normal_drift_velocity_, diffusivity_, *bc_, normal_flux);
+  }
+
   // ========================================================
   // Compute:
   //
@@ -205,8 +216,7 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
     // Gamma = drift-diffusion SG flux
     // ----------------------------------------------------
 
-    discretization::operators::scharfetterGummelFlux(
-        density, *normal_drift_velocity_, diffusivity_, *bc_, flux_);
+    computeNormalFlux(density, flux_);
 
     // ----------------------------------------------------
     // div(Gamma)

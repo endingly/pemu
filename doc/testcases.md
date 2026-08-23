@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 223 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 231 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -28,8 +28,9 @@
 
 | 用例 | 保证 |
 | --- | --- |
-| `PlasmaQuantitiesTest.DefineDimensionallyConsistentReferences` | 项目定义的数密度、数密度变化率、反应率密度、法向电场和法向漂移速度 quantity specification 只接受量纲相容的 mp-units unit。 |
-| `MpUnitsBridgeTest.ProducesRuntimeMetadataWithoutStringParsing` | mp-units reference 在编译期直接桥接为可平凡复制的 `QuantityKind + precise_unit`；数密度、电荷密度、电势和法向电场的运行期单位正确，且不依赖字符串解析。 |
+| `PlasmaQuantitiesTest.DefineDimensionallyConsistentReferences` | 项目定义的数密度、反应率密度、法向电场/漂移速度及电子平均能量、能量密度和能量源 quantity specification 只接受量纲相容的 mp-units unit。 |
+| `MpUnitsBridgeTest.ProducesRuntimeMetadataWithoutStringParsing` | mp-units reference 在编译期直接桥接为可平凡复制的 `QuantityKind + precise_unit`；包括 $\mathrm{eV/cm^3}$ 在内的运行期单位正确，且不依赖字符串解析。 |
+| `RuntimeUnitStringTest.UsesStablePlasmaEnergySpellings` | 项目 formatter 为电子能量密度、源项及积分功率输出稳定的 `eV/cm^3`、`eV/(cm^3*s)` 与 `eV/s`，未登记单位仍回退到 LLNL formatter。 |
 
 ## 边界条件（`submod/boundary/test/test_boundary.cpp`）
 
@@ -88,7 +89,7 @@
 | `FaceFieldKeepsMeshAssociation` | 面场保留原网格身份。 |
 | `FieldTest.FieldSetGroupsTypedFieldsAndPropagatesMetadata` | `FieldSet` 能按强类型稠密 ID 聚合相互独立的单元场与面场，并统一保留网格、初值、元数据、遍历和批量填充语义。 |
 | `FieldTest.PhysicalQuantityIsMetadataAndRawStorageRemainsDouble` | metadata 只保存由 mp-units bridge 产生的 `QuantityKind + precise_unit`，该表示可平凡复制，而场元素、`data()` 和核心存储仍为 `double`。 |
-| `FieldTest.MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata` | 编译期 bridge 不经字符串解析即可把数密度、电荷密度和法向电场 reference 映射为正确的语义枚举与 LLNL `precise_unit`。 |
+| `FieldTest.MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata` | 编译期 bridge 不经字符串解析即可把数密度、电荷密度、法向电场和电子能量密度 reference 映射为正确的语义枚举与 LLNL `precise_unit`。 |
 | `FieldTest.QuantityBoundaryConvertsToFieldStorageUnit` | `fillQuantity`/`setQuantity` 可将米输入换算为按厘米存储的裸值，`quantityAt` 能重新包装和换算输出。 |
 | `FieldTest.QuantityBoundaryRejectsReferenceDifferentFromMetadata` | 边界适配器会拒绝单位不同的 reference，也会拒绝同为伏特但 quantity specification 不同的 reference。 |
 
@@ -233,6 +234,9 @@
 | 用例 | 保证 |
 | --- | --- |
 | `ChargeDensityTest.EqualOppositeSpeciesAreNeutral` | 等密度、等电荷量异号的两种粒子产生零净电荷密度。 |
+| `ElectronFieldPowerTest.ReconstructsPositiveHeatingForElectronFluxAgainstField` | 用两单元正交网格验证完整面粒子通量与电场反向时，离散 $-\boldsymbol\Gamma_e\cdot\mathbf E$ 在两个单元中均得到正确的正加热。 |
+| `ElectronFieldPowerTest.RejectsFieldsFromDifferentMeshes` | 电场功重构拒绝来自不同网格的通量、电场和目标场。 |
+| `ElectronFieldPowerTest.RejectsNonFiniteFaceData` | 电场功重构在数值进入单元累加前拒绝非有限的面通量或电场。 |
 | `ReactionTest.ElectronImpactIonizationComputesExpectedRate` | 电子碰撞电离率按给定电子密度、中性粒子密度和速率系数计算。 |
 | `ReactionTest.ZeroElectronDensityProducesNoIonization` | 没有电子时电子碰撞电离率严格为零。 |
 | `ReactionTest.IonizationCreatesElectronIonPairs` | 一次电离同时产生一个电子和一个正离子。 |
@@ -260,12 +264,21 @@
 | `FixedStepExplicitSpeciesContinuityStepperTest.ConstantDensityRemainsConstant` | 与边界相容的常密度在固定步长 SG 输运下不变。 |
 | `FixedStepExplicitSpeciesContinuityStepperTest.SourceIncreasesDensity` | 常源项按照 $n^{k+1}=n^k+\Delta tS$ 增加密度。 |
 | `FixedStepExplicitSpeciesContinuityStepperTest.SourceChangesTotalParticlesByIntegratedSource` | 总粒子数变化等于 $\Delta t$ 乘体积积分源项。 |
+| `ExplicitElectronEnergyStepperTest.ConvertsBetweenEnergyDensityAndMeanEnergy` | $w_e=n_e\bar\varepsilon_e$ 双向转换正确，真空/低密度单元的平均能量按约定置零。 |
+| `ExplicitElectronEnergyStepperTest.MaxwellianClosureScalesCompleteTransportOperator` | 默认 $5/3$ Maxwellian closure 同时缩放能量漂移速度和扩散系数，保持面 Péclet 数并按比例缩放完整 SG 算子。 |
+| `ExplicitElectronEnergyStepperTest.RejectsInvalidEnergyBoundaryAtConstruction` | 能量输运构造时拒绝负值、非有限、缺失或非 Dirichlet 边界状态。 |
+| `ExplicitElectronEnergyStepperTest.ConstantEnergyDensityRemainsConstant` | 零漂移、相容边界和零源下，常电子能量密度保持不变。 |
+| `ExplicitElectronEnergyStepperTest.SourceChangesIntegratedEnergyByIntegratedSource` | 常值状态下总能量变化等于 $\Delta t$ 乘能量源的控制体积分。 |
+| `ExplicitElectronEnergyStepperTest.DiffusionRedistributesSymmetricEnergyConservatively` | 对称边界下能量由高值单元扩散到低值单元，同时保持全域积分。 |
+| `ExplicitElectronEnergyStepperTest.RejectsTransportCflViolationWithoutChangingEnergy` | 超过 SG 显式输运 CFL 时拒绝推进，能量场保持事务性不变。 |
+| `ExplicitElectronEnergyStepperTest.RejectsNegativeSourceUpdateWithoutChangingEnergy` | 保守非负步长上限识别过强能量 sink，失败推进不留下部分更新。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.UniformNeutralPlasmaRemainsStationary` | 固定多物种推进器保持均匀中性状态。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.ChargeDensitySupportsMoreThanTwoSpecies` | 电荷密度对任意数量物种按 $\rho=\sum_s q_sn_s$ 求和。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.ImmobileSpeciesIsNotUpdated` | 标为 immobile 的物种不参与输运更新。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.AppliedPotentialProducesCorrectDriftForAllChargedSpecies` | 每个带电物种按迁移率和极性得到正确漂移速度。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.ComputesDriftForThreeTransportedChargedSpecies` | 漂移计算不隐含“只有电子和一种离子”的限制。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.CflFailureDoesNotPartiallyUpdateSpecies` | 多物种 CFL 预检具有原子性，不留下半更新状态。 |
+| `FixedStepMultiSpeciesDriftDiffusionStepperTest.SourcePositivityFailureDoesNotPartiallyUpdateSpecies` | 固定步长先计算全部物种增量；任一强负源会产生负候选密度时拒绝整步且不修改其他物种。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsWrongSpeciesFieldCount` | 场数组物种数必须与 `SpeciesSet` 一致。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsFieldsFromDifferentMesh` | 多物种场不能跨网格传给推进器。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.MatchesLegacyTwoSpeciesSolver` | 更一般的固定多物种实现与固定双物种实现给出相同结果。 |
@@ -298,6 +311,11 @@
 | `FixedStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 固定步长仿真结束后不能再次推进。 |
 | `FixedStepPlasmaSimulationTest.StatisticsRejectFieldsWithoutPhysicalMetadata` | 启用物理统计时，simulation 必须在运行前拒绝缺少预期 `QuantityKind + precise_unit` metadata 的场，避免生成无单位或错单位统计。 |
 | `FixedStepPlasmaSimulationTest.CheckpointRejectsReorderedSpeciesWithoutChangingDensity` | checkpoint 将 species ID/name 纳入稳定 key；物种顺序不一致时恢复失败，且目标 density、clock 和状态保持不变。 |
+| `FixedStepPlasmaSimulationTest.CheckpointRoundTripsCallerEnergyMetadata` | checkpoint 恢复临时场沿用调用方 energy metadata；字段名与 transport 内部展示名不同时仍可恢复自身写出的状态。 |
+| `FixedStepPlasmaSimulationTest.AdvanceUpdatesMandatoryElectronEnergyAndMeanEnergy` | 固定步 workflow 用显式能量源推进必需的电子能量密度，并在物种与能量共同提交后刷新平均电子能量。 |
+| `FixedStepPlasmaSimulationTest.SpeciesPositivityFailureLeavesCoupledStateUnchanged` | 固定步强反应 sink 失败时，species density、electron energy 和 clock 均保持在原时间层，workflow 进入 failed。 |
+| `FixedStepPlasmaSimulationTest.RejectsElectronEnergyUnitDifferentFromTransportMetadata` | 即使 quantity kind 相同，调用方能量场使用与 transport 不同的存储单位也会在构造阶段被拒绝。 |
+| `FixedStepPlasmaSimulationTest.RejectsMissingElectronEnergyAdditionalSourceEvaluator` | Simulation 构造阶段拒绝缺失电子能量附加源 evaluator 的配置，防止静默跳过碰撞/外部能量闭合。 |
 | `AdaptiveTimeClockTest.LandsExactlyOnEndTime` | 可变步长累加后时钟精确吸附到终止时刻。 |
 | `AdaptiveStepPlasmaSimulationTest.RunSelectsVariableStepsAndReachesEndTime` | 自适应仿真选取可变步长、使用末步截断并准确到达终止时间。 |
 | `AdaptiveStepPlasmaSimulationTest.CheckpointWorkflowRestoresClockDensityAndTimeStepHistory` | simulation 自动保存自适应 checkpoint，并在新 workflow 中恢复 density、step/time 与 `previous_dt`，续算结果和未中断运行一致。 |
@@ -308,9 +326,10 @@
 | `AdaptiveStepPlasmaSimulationTest.ReactionRateIsReevaluatedFromUpdatedStateEveryStep` | 每一个自适应步都从最新粒子密度重新计算反应率。 |
 | `AdaptiveStepPlasmaSimulationTest.ReactionEvaluatorSeesCurrentElectricField` | 自适应反应模型读取的电场来自同一时间层的泊松求解。 |
 | `AdaptiveStepPlasmaSimulationTest.ReactionSinkLimitsTimeStepAndPreservesNonNegativeDensity` | 强反应损失会收紧正性步长限制，更新后所有物种密度保持非负。 |
+| `AdaptiveStepPlasmaSimulationTest.ElectronEnergyDepletionLimitsTheCoupledTimeStep` | 强电子能量耗散会进入统一自适应步长 proposal，并在物种本身允许更大步长时收紧耦合步长、保持能量非负。 |
 | `AdaptiveStepPlasmaSimulationTest.SolvesPoissonOncePerAdaptiveStepAndReusesFactorization` | 自适应仿真每步只进行一次泊松求解，并复用固定矩阵的符号分析与数值分解。 |
 | `AdaptiveStepPlasmaSimulationTest.RejectsAdvanceAfterSimulationFinished` | 自适应仿真到达终止时刻后拒绝继续推进。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.SolvesUniformElectronImpactIonizationAcrossMultipleSteps` | 在 `poisson_64x64.msh` 的 4096 单元上运行 5 个均匀成对电离步，检查每步步长、终止时间、末步反应率/源项、逐单元/全域密度、电中性及零电势电场。 |
-| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项的运行期 metadata 传播，以及受输运稳定性约束的多步推进、非负密度和电子相对离子向右漂移。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential 和 electric-field 七列统计表及单位，不含普通事件、`DETAILS` 或零值异常计数。真实 `VtkHdfWriter` 将 step 0 至终态的全部同步状态写入 `<build>/submod/simulation/output/parallel-plate-400v/parallel-plate-400v.vtkhdf`，测试再用官方 reader 校验时间步数与终态 step。 |
-| `PlasmaSimulation64x64CheckpointTest.ParallelPlate400VCheckpointRestoresAndContinuesSimulation` | 在关闭 dump/trace 的 $0/400\,\mathrm{V}$ 厘米网格固定步仿真中，由 simulation workflow 在第 3 步自动保存 checkpoint；新建 simulation 通过 `restoreCheckpoint()` 自动恢复字段与 clock 后续跑至第 8 步，最终 density、电势、电荷和全部 face 电场/漂移速度与未中断运行逐项一致。 |
+| `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项/电子能量的运行期 metadata 传播，以及受物种与能量联合稳定性约束的多步推进、非负密度和电子相对离子向右漂移。电子能量源由同一 SG 粒子通量形成的电场功与 $15.76\,\mathrm{eV}$ 每次电离的附加损失共同组成，并逐单元验证有限且为正。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential、electric-field、电子能量密度、平均能量和非零能量源统计，能量复合单位稳定显示为 `eV/cm^3` 与 `eV/(cm^3*s)`。真实 `VtkHdfWriter` 将包括电子能量密度和平均能量在内的 step 0 至终态同步状态写入 `<build>/submod/simulation/output/parallel-plate-400v/parallel-plate-400v.vtkhdf`，测试再用官方 reader 校验时间步数与终态 step。 |
+| `PlasmaSimulation64x64CheckpointTest.ParallelPlate400VCheckpointRestoresAndContinuesSimulation` | 在关闭 dump/trace 的 $0/400\,\mathrm{V}$ 厘米网格固定步仿真中，由 simulation workflow 在第 3 步自动保存 checkpoint；新建 simulation 通过 `restoreCheckpoint()` 自动恢复物种密度、电子能量密度与 clock 后续跑至第 8 步，最终能量、density、电势、电荷和全部 face 电场/漂移速度与未中断运行逐项一致。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep` | 使用与上述 \(0/400\,\mathrm{V}\) 厘米网格、电离反应和初始物种完全相同的配置；先以真实 CHOLMOD 完成一个物理时间步，再注入一次底层求解失败，验证 `linalg` 域 diagnostic、可读的 `SolveFailed` 状态与根因消息先于 simulation 失败事件输出。结构化失败 trace 写入当前工作目录的 `test.failure.diag.log`。 |

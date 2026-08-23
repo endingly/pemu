@@ -166,14 +166,22 @@ $\mathrm{cm^{-3}}\times\mathrm{cm^3}=1$。`TraceAttribute` 可选地按值携带
 本身不持有或接收单位；单位只在 `finish(value_unit, weight_unit)` 时附加。
 
 LLNL Units 会选择自己的等价规范形式，例如 $\mathrm{cm^3}$ 可能输出为 `mL`，
-$\mathrm{C/cm^3}$ 可能输出为 `kC/L`；量纲、倍率和可转换性不变。无量纲量由本项目明确
-显示成 `[1]`，避免空单位 `[]` 难以辨认。
+$\mathrm{C/cm^3}$ 可能输出为 `kC/L`；量纲、倍率和可转换性不变。项目通过
+`pemu::to_string(precise_unit)` 集中定义少量稳定的领域显示形式，目前包括 `eV/cm^3`、
+`eV/(cm^3*s)` 与 `eV/s`。未登记单位继续委托 LLNL formatter；该适配器只影响字符串，
+不参与单位比较、换算或数值计算。无量纲量由本项目明确显示成 `[1]`，避免空单位 `[]`
+难以辨认。
 
 ## 6. 有意保留的边界
 
 当前实现不在每次加法、乘法或散度计算中动态检查单位。核心算子仍依靠其数学契约，例如
 扩散通量函数的输入必须已经使用同一套约定单位。原因是这些调用位于高频数值路径，且其
 量纲关系已经由离散方程固定。
+
+Simulation 是单位边界而不是热循环：构造 electron-energy workflow 时会一次性要求各物种
+density 与 transport 声明一致，并验证 $w_e=n_e\bar\varepsilon_e$、source/time、
+potential/electric-field、drift/length 的单位代数关系。电场功还会从电势存储单位换算到平均
+电子能量存储单位。这样既支持一致的非规范单位，也不会把 J 裸值误标或误算成 eV。
 
 单位系统主要防止以下错误：
 

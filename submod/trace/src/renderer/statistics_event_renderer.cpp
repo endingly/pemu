@@ -1,4 +1,5 @@
 #include <pemu/trace/renderer/statistics_event_renderer.hpp>
+#include <pemu/unit/quantity_metadata.hpp>
 
 #include <fmt/format.h>
 
@@ -44,7 +45,7 @@ void appendValue(Buffer& output, const TraceValue& value) {
 template <typename Buffer>
 void appendUnit(Buffer& output, units::precise_unit unit, bool brackets) {
   const auto unit_name =
-      unit == units::precise::one ? std::string{"1"} : units::to_string(unit);
+      pemu::to_string(unit);
   if (brackets) {
     fmt::format_to(std::back_inserter(output), " [{}]", unit_name);
   } else {

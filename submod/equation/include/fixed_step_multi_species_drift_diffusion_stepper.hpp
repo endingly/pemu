@@ -57,6 +57,11 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
     return drift_velocity_[id];
   }
 
+  /** @brief Computes one species' current SG particle flux without advancing. */
+  void computeParticleFluxNormal(const physics::SpeciesCellFields& density,
+                                 physics::SpeciesId id,
+                                 field::FaceField<double>& normal_flux) const;
+
   [[nodiscard]] double timeStep() const noexcept { return dt_; }
 
   [[nodiscard]] const field::PlasmaFieldMetadata& fieldMetadata()
@@ -99,6 +104,7 @@ class FixedStepMultiSpeciesDriftDiffusionStepper {
   field::CellField<double> potential_;
   field::FaceField<double> electric_field_normal_;
   physics::SpeciesFaceFields drift_velocity_;
+  physics::SpeciesCellFields increments_;
   equation::PoissonSolver poisson_solver_;
   std::vector<std::unique_ptr<FixedStepExplicitSpeciesContinuityStepper>>
       transport_steppers_;

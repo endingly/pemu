@@ -364,6 +364,63 @@ struct NoReactionEvaluator {
                   physics::ReactionRateFields&) const noexcept {}
 };
 
+/** @brief Explicitly selects zero additional energy exchange in tests. */
+struct ZeroElectronEnergyAdditionalSourceEvaluator {
+  void operator()(const ElectronEnergySourceContext&,
+                  field::CellField<double>& source) const noexcept {
+    source.fill(0.0);
+  }
+};
+
+/** @brief Writes one uniform additional energy source for coupling tests. */
+struct ConstantElectronEnergyAdditionalSourceEvaluator {
+  double value{};
+
+  void operator()(const ElectronEnergySourceContext&,
+                  field::CellField<double>& source) const noexcept {
+    source.fill(value);
+  }
+};
+
+/** @brief Converts one reaction rate into its electron inelastic-energy loss. */
+struct ReactionEnergyLossEvaluator {
+  physics::ReactionId reaction;
+  double energy_loss_per_reaction;
+
+  void operator()(const ElectronEnergySourceContext& context,
+                  field::CellField<double>& source) const noexcept {
+    for (mesh::CellId cell = 0; cell < source.mesh().numCells(); ++cell) {
+      source[cell] =
+          -energy_loss_per_reaction * context.reaction_rates[reaction][cell];
+    }
+  }
+};
+
+/** @brief Creates constant Dirichlet energy boundaries for workflow tests. */
+[[nodiscard]] boundary::BoundaryConditionSet
+makeConstantElectronEnergyBoundaryConditions(double value) {
+  boundary::BoundaryConditionSet result;
+  result.setDirichlet(mesh::BoundaryId{1}, value);
+  result.setDirichlet(mesh::BoundaryId{2}, value);
+  result.setDirichlet(mesh::BoundaryId{3}, value);
+  result.setDirichlet(mesh::BoundaryId{4}, value);
+  return result;
+}
+
+/** @brief Binds a test energy state to the selected electron species. */
+[[nodiscard]] ElectronEnergyConfiguration makeTestElectronEnergy(
+    field::CellField<double>& energy_density,
+    physics::SpeciesId electron = physics::SpeciesId{0},
+    double boundary_value = 1.0) {
+  return {.energy_density = energy_density,
+          .electron = electron,
+          .boundary_conditions =
+              makeConstantElectronEnergyBoundaryConditions(boundary_value),
+          .additional_source_evaluator =
+              ZeroElectronEnergyAdditionalSourceEvaluator{},
+          .allow_unitless_raw_values = true};
+}
+
 struct RecordingTraceSink {
   std::vector<std::string>* names{};
   std::vector<std::string>* categories{};
@@ -707,30 +764,38 @@ class FailAfterSuccessfulCholmodSolves final : public linalg::ISolver {
 
 class FixedStepPlasmaSimulationTest : public ::testing::Test {
  protected:
-  FixedStepPlasmaSimulationTest() : mesh_(twoQuadsMeshPath()) {}
+  FixedStepPlasmaSimulationTest()
+      : mesh_(twoQuadsMeshPath()), electron_energy_density_(mesh_, 1.0) {}
 
   mesh::MoabMesh mesh_;
+  field::CellField<double> electron_energy_density_;
 };
 
 class AdaptiveStepPlasmaSimulationTest : public ::testing::Test {
  protected:
-  AdaptiveStepPlasmaSimulationTest() : mesh_(twoQuadsMeshPath()) {}
+  AdaptiveStepPlasmaSimulationTest()
+      : mesh_(twoQuadsMeshPath()), electron_energy_density_(mesh_, 1.0) {}
 
   mesh::MoabMesh mesh_;
+  field::CellField<double> electron_energy_density_;
 };
 
 class AdaptiveStepPlasmaSimulation64x64Test : public ::testing::Test {
  protected:
-  AdaptiveStepPlasmaSimulation64x64Test() : mesh_(poisson64x64MeshPath()) {}
+  AdaptiveStepPlasmaSimulation64x64Test()
+      : mesh_(poisson64x64MeshPath()), electron_energy_density_(mesh_, 1.0) {}
 
   mesh::MoabMesh mesh_;
+  field::CellField<double> electron_energy_density_;
 };
 
 class PlasmaSimulation64x64CheckpointTest : public ::testing::Test {
  protected:
-  PlasmaSimulation64x64CheckpointTest() : mesh_(poisson64x64MeshPath()) {}
+  PlasmaSimulation64x64CheckpointTest()
+      : mesh_(poisson64x64MeshPath()), electron_energy_density_(mesh_, 1.0) {}
 
   mesh::MoabMesh mesh_;
+  field::CellField<double> electron_energy_density_;
 };
 
 // ============================================================
@@ -898,6 +963,9 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
+
                                        FixedStepClock(dt, 1));
 
   // --------------------------------------------------------
@@ -998,6 +1066,9 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
+
                                        FixedStepClock(dt, 2));
 
   ASSERT_TRUE(simulation.advance().success());
@@ -1085,6 +1156,9 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   FixedStepPlasmaSimulation simulation(density, reactions, transport, evaluator,
 
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
+
                                        FixedStepClock(dt, 1));
 
   const auto result = simulation.advance();
@@ -1149,6 +1223,9 @@ TEST_F(FixedStepPlasmaSimulationTest, RunAdvancesUntilClockIsFinished) {
 
                                        NoReactionEvaluator{},
 
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
+
                                        FixedStepClock(dt, total_steps));
 
   simulation.run();
@@ -1176,6 +1253,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   std::size_t flush_count{};
   FixedStepPlasmaSimulation simulation(
       density, reactions, transport, NoReactionEvaluator{},
+      makeTestElectronEnergy(electron_energy_density_),
       FixedStepClock(dt, 4), FlushCountingTraceSink{&flush_count});
 
   EXPECT_EQ(simulation.state(), SimulationState::ready);
@@ -1215,6 +1293,7 @@ TEST_F(FixedStepPlasmaSimulationTest, StopFailureTransitionsWorkflowToFailed) {
   FailingFinishWriter writer;
   FixedStepPlasmaSimulation simulation(
       density, reactions, transport, NoReactionEvaluator{},
+      makeTestElectronEnergy(electron_energy_density_),
       FixedStepClock(dt, 2), trace::NullTraceSink{}, {},
       {.writer = &writer,
        .directory = "simulation-output",
@@ -1261,6 +1340,8 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
   FixedStepPlasmaSimulation simulation(density, reactions, transport,
                                        NoReactionEvaluator{},
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
                                        FixedStepClock(dt, total_steps), sink);
 
   simulation.run();
@@ -1271,11 +1352,15 @@ TEST_F(FixedStepPlasmaSimulationTest,
       "electrostatics.completed",
       "reaction_rates.completed",
       "sources.completed",
+      "electron_energy_source.completed",
+      "electron_energy.completed",
       "step.completed",
       "step.started",
       "electrostatics.completed",
       "reaction_rates.completed",
       "sources.completed",
+      "electron_energy_source.completed",
+      "electron_energy.completed",
       "step.completed",
       "run.completed",
   };
@@ -1330,6 +1415,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   };
   FixedStepPlasmaSimulation simulation(
       density, reactions, transport, NoReactionEvaluator{},
+      makeTestElectronEnergy(electron_energy_density_),
       FixedStepClock(dt, 2), sink, {}, output_options);
 
   simulation.run();
@@ -1344,7 +1430,8 @@ TEST_F(FixedStepPlasmaSimulationTest,
     EXPECT_EQ(request.cell_names,
               (std::vector<std::string>{
                   "species_0_e_number_density", "species_1_Ar+_number_density",
-                  "charge_density", "electric_potential"}));
+                  "charge_density", "electric_potential",
+                  "electron_energy_density", "electron_mean_energy"}));
     EXPECT_EQ(request.face_names,
               (std::vector<std::string>{"species_0_e_normal_drift_velocity",
                                         "species_1_Ar+_normal_drift_velocity",
@@ -1373,6 +1460,8 @@ TEST_F(FixedStepPlasmaSimulationTest,
   trace::OstreamTraceSink sink(output);
   FixedStepPlasmaSimulation simulation(density, reactions, transport,
                                        NoReactionEvaluator{},
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
                                        FixedStepClock(dt, 1), sink);
 
   const auto result = simulation.advance();
@@ -1447,6 +1536,9 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
                                        NoReactionEvaluator{},
 
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
+
                                        FixedStepClock(dt, total_steps));
 
   simulation.run();
@@ -1505,6 +1597,9 @@ TEST_F(FixedStepPlasmaSimulationTest,
 
                                          NoReactionEvaluator{},
 
+                                         makeTestElectronEnergy(
+                                             electron_energy_density_),
+
                                          FixedStepClock(clock_dt, 10)),
                std::invalid_argument);
 }
@@ -1551,6 +1646,9 @@ TEST_F(FixedStepPlasmaSimulationTest, RejectsAdvanceAfterSimulationFinished) {
 
                                        NoReactionEvaluator{},
 
+                                       makeTestElectronEnergy(
+                                           electron_energy_density_),
+
                                        FixedStepClock(dt, 1));
 
   ASSERT_TRUE(simulation.advance().success());
@@ -1578,6 +1676,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
   EXPECT_THROW(
       FixedStepPlasmaSimulation(
           density, reactions, transport, NoReactionEvaluator{},
+          makeTestElectronEnergy(electron_energy_density_),
           FixedStepClock(dt, 1), trace::NullTraceSink{},
           trace::StatisticsOptions{true, 1, 1.0 * cm, isq::length[cm]}),
       std::invalid_argument);
@@ -1599,6 +1698,8 @@ TEST_F(FixedStepPlasmaSimulationTest,
       std::make_unique<linalg::CholmodSolver>());
   FixedStepPlasmaSimulation original(original_density, original_reactions,
                                      original_transport, NoReactionEvaluator{},
+                                     makeTestElectronEnergy(
+                                         electron_energy_density_),
                                      FixedStepClock(dt, 2));
   const auto checkpoint_path =
       std::filesystem::path{PEMU_SIMULATION_TEST_OUTPUT_DIR} /
@@ -1621,6 +1722,7 @@ TEST_F(FixedStepPlasmaSimulationTest,
        .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
   physics::SpeciesCellFields reordered_density(mesh_, reordered_species.size(),
                                                7.0);
+  field::CellField<double> reordered_energy_density(mesh_, 7.0);
   physics::ReactionNetwork reordered_reactions(reordered_species);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper reordered_transport(
       mesh_, reordered_species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
@@ -1628,7 +1730,10 @@ TEST_F(FixedStepPlasmaSimulationTest,
       std::make_unique<linalg::CholmodSolver>());
   FixedStepPlasmaSimulation reordered(
       reordered_density, reordered_reactions, reordered_transport,
-      NoReactionEvaluator{}, FixedStepClock(dt, 2));
+      NoReactionEvaluator{},
+      makeTestElectronEnergy(reordered_energy_density, physics::SpeciesId{1},
+                             7.0),
+      FixedStepClock(dt, 2));
   const output::checkpoint::VtkHdfReader reader;
 
   EXPECT_THROW((void)reordered.restoreCheckpoint(reader, checkpoint_path),
@@ -1640,6 +1745,55 @@ TEST_F(FixedStepPlasmaSimulationTest,
   }
   EXPECT_EQ(reordered.state(), SimulationState::ready);
   EXPECT_EQ(reordered.step(), 0u);
+}
+
+TEST_F(FixedStepPlasmaSimulationTest,
+       CheckpointRoundTripsCallerEnergyMetadata) {
+  constexpr double dt = 0.01;
+  auto metadata = field::centimetrePlasmaFieldMetadata();
+  auto caller_energy_metadata = metadata.electron_energy_density;
+  caller_energy_metadata.name = "caller-owned electron energy";
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0,
+                                     metadata.number_density);
+  field::CellField<double> energy_density(mesh_, 2.0,
+                                          caller_energy_metadata);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(), metadata);
+  FixedStepPlasmaSimulation original(
+      density, reactions, transport, NoReactionEvaluator{},
+      makeTestElectronEnergy(energy_density, ids.electron, 2.0),
+      FixedStepClock(dt, 1));
+  const auto checkpoint_path =
+      std::filesystem::path{PEMU_SIMULATION_TEST_OUTPUT_DIR} /
+      "caller-energy-metadata-checkpoint" / "state.vtkhdf";
+  const output::checkpoint::VtkHdfWriter writer;
+  (void)original.saveCheckpoint(writer, checkpoint_path, true);
+
+  physics::SpeciesCellFields restored_density(
+      mesh_, species.size(), 0.0, metadata.number_density);
+  field::CellField<double> restored_energy(mesh_, 0.0,
+                                           caller_energy_metadata);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper restored_transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(), metadata);
+  FixedStepPlasmaSimulation restored(
+      restored_density, reactions, restored_transport, NoReactionEvaluator{},
+      makeTestElectronEnergy(restored_energy, ids.electron, 2.0),
+      FixedStepClock(dt, 1));
+  const output::checkpoint::VtkHdfReader reader;
+
+  (void)restored.restoreCheckpoint(reader, checkpoint_path);
+  EXPECT_EQ(restored_energy.metadata().name,
+            caller_energy_metadata.name);
+  for (const double value : restored_energy) {
+    EXPECT_DOUBLE_EQ(value, 2.0);
+  }
 }
 
 TEST(AdaptiveTimeClockTest, LandsExactlyOnEndTime) {
@@ -1670,6 +1824,8 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
                                           NoReactionEvaluator{},
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
                                           AdaptiveTimeClock(0.1));
 
   simulation.run();
@@ -1701,6 +1857,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
       .safety = 0.9, .min_dt = 1e-8, .max_dt = 0.04, .max_growth = 2.0};
 
   physics::SpeciesCellFields uninterrupted_density(mesh_, species.size(), 1.0);
+  field::CellField<double> uninterrupted_energy_density(mesh_, 1.0);
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper
       uninterrupted_transport(
           mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
@@ -1708,6 +1865,8 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
           std::make_unique<linalg::CholmodSolver>(), time_config);
   AdaptiveStepPlasmaSimulation uninterrupted(uninterrupted_density, reactions,
                                              uninterrupted_transport, evaluator,
+                                             makeTestElectronEnergy(
+                                                 uninterrupted_energy_density),
                                              AdaptiveTimeClock(0.1));
   uninterrupted.run();
 
@@ -1716,12 +1875,14 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
       "adaptive-checkpoint-workflow" / "state.vtkhdf";
   const output::checkpoint::VtkHdfWriter writer;
   physics::SpeciesCellFields interrupted_density(mesh_, species.size(), 1.0);
+  field::CellField<double> interrupted_energy_density(mesh_, 1.0);
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper interrupted_transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
       std::make_unique<linalg::CholmodSolver>(), time_config);
   AdaptiveStepPlasmaSimulation interrupted(
       interrupted_density, reactions, interrupted_transport, evaluator,
+      makeTestElectronEnergy(interrupted_energy_density),
       AdaptiveTimeClock(0.1), trace::NullTraceSink{}, {}, {},
       {.writer = &writer,
        .path = checkpoint_path,
@@ -1733,12 +1894,15 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   ASSERT_TRUE(std::filesystem::is_regular_file(checkpoint_path));
 
   physics::SpeciesCellFields restored_density(mesh_, species.size(), 0.0);
+  field::CellField<double> restored_energy_density(mesh_, 0.0);
   equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper restored_transport(
       mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
       makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
       std::make_unique<linalg::CholmodSolver>(), time_config);
   AdaptiveStepPlasmaSimulation restored(restored_density, reactions,
                                         restored_transport, evaluator,
+                                        makeTestElectronEnergy(
+                                            restored_energy_density),
                                         AdaptiveTimeClock(0.1));
   const CountingCheckpointReader reader;
   const auto record = restored.restoreCheckpoint(reader, checkpoint_path);
@@ -1749,6 +1913,10 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   EXPECT_EQ(restored.step(), 1u);
   EXPECT_DOUBLE_EQ(restored.time(), record.stamp.time);
   EXPECT_DOUBLE_EQ(restored.lastTimeStep(), interrupted.lastTimeStep());
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_DOUBLE_EQ(restored_energy_density[cell],
+                     interrupted_energy_density[cell]);
+  }
   EXPECT_FALSE(restored.hasLastTimeStepProposal());
   restored.run();
 
@@ -1760,7 +1928,135 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
                      uninterrupted_density[ids.electron][cell]);
     EXPECT_DOUBLE_EQ(restored_density[ids.ion][cell],
                      uninterrupted_density[ids.ion][cell]);
+    EXPECT_DOUBLE_EQ(restored_energy_density[cell],
+                     uninterrupted_energy_density[cell]);
   }
+}
+
+TEST_F(FixedStepPlasmaSimulationTest,
+       AdvanceUpdatesMandatoryElectronEnergyAndMeanEnergy) {
+  constexpr double dt = 0.1;
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  ElectronEnergyConfiguration energy{
+      .energy_density = electron_energy_density_,
+      .electron = ids.electron,
+      .boundary_conditions =
+          makeConstantElectronEnergyBoundaryConditions(1.0),
+      .additional_source_evaluator =
+          ConstantElectronEnergyAdditionalSourceEvaluator{.value = 2.0},
+      .allow_unitless_raw_values = true};
+
+  FixedStepPlasmaSimulation simulation(
+      density, reactions, transport, NoReactionEvaluator{}, std::move(energy),
+      FixedStepClock(dt, 1));
+
+  ASSERT_TRUE(simulation.advance().success());
+  EXPECT_EQ(&simulation.electronEnergyDensity(), &electron_energy_density_);
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    EXPECT_NEAR(electron_energy_density_[cell], 1.2, 1e-12);
+    EXPECT_NEAR(simulation.electronMeanEnergy()[cell], 1.2, 1e-12);
+  }
+}
+
+TEST_F(FixedStepPlasmaSimulationTest,
+       SpeciesPositivityFailureLeavesCoupledStateUnchanged) {
+  constexpr double dt = 0.2;
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  const auto loss = reactions.addReaction(
+      {.name = "pair loss",
+       .stoichiometry = {{ids.electron, -1.0}, {ids.ion, -1.0}}});
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  ElectronImpactIonizationEvaluator evaluator{.electron = ids.electron,
+                                              .ionization = loss,
+                                              .neutral_density = 1.0,
+                                              .rate_coefficient = 10.0};
+  FixedStepPlasmaSimulation simulation(
+      density, reactions, transport, evaluator,
+      makeTestElectronEnergy(electron_energy_density_),
+      FixedStepClock(dt, 1));
+  const std::vector<double> density_before(density[ids.electron].begin(),
+                                           density[ids.electron].end());
+  const std::vector<double> energy_before(electron_energy_density_.begin(),
+                                          electron_energy_density_.end());
+
+  EXPECT_THROW((void)simulation.advance(), std::runtime_error);
+  EXPECT_EQ(std::vector<double>(density[ids.electron].begin(),
+                                density[ids.electron].end()),
+            density_before);
+  EXPECT_EQ(std::vector<double>(electron_energy_density_.begin(),
+                                electron_energy_density_.end()),
+            energy_before);
+  EXPECT_EQ(simulation.step(), 0u);
+  EXPECT_EQ(simulation.state(), SimulationState::failed);
+}
+
+TEST_F(FixedStepPlasmaSimulationTest,
+       RejectsElectronEnergyUnitDifferentFromTransportMetadata) {
+  const auto metadata = field::centimetrePlasmaFieldMetadata();
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0,
+                                     metadata.number_density);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, 0.01, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(), metadata);
+  auto wrong_energy_metadata = metadata.electron_energy_density;
+  wrong_energy_metadata.physical_quantity = unit::PhysicalQuantityMetadata{
+      unit::QuantityKind::electron_energy_density,
+      units::precise::J / units::precise::cm.pow(3)};
+  field::CellField<double> energy_density(mesh_, 1.0,
+                                          wrong_energy_metadata);
+
+  EXPECT_THROW(
+      FixedStepPlasmaSimulation(
+          density, reactions, transport, NoReactionEvaluator{},
+          {.energy_density = energy_density,
+           .electron = ids.electron,
+           .boundary_conditions =
+               makeConstantElectronEnergyBoundaryConditions(1.0),
+           .additional_source_evaluator =
+               ZeroElectronEnergyAdditionalSourceEvaluator{}},
+          FixedStepClock(0.01, 1)),
+      std::invalid_argument);
+}
+
+TEST_F(FixedStepPlasmaSimulationTest,
+       RejectsMissingElectronEnergyAdditionalSourceEvaluator) {
+  constexpr double dt = 0.01;
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::FixedStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, dt, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+
+  EXPECT_THROW(
+      FixedStepPlasmaSimulation(
+          density, reactions, transport, NoReactionEvaluator{},
+          {.energy_density = electron_energy_density_,
+           .electron = ids.electron,
+           .boundary_conditions =
+               makeConstantElectronEnergyBoundaryConditions(1.0),
+           .additional_source_evaluator = {}},
+          FixedStepClock(dt, 1)),
+      std::invalid_argument);
 }
 
 TEST_F(AdaptiveStepPlasmaSimulationTest,
@@ -1786,6 +2082,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   };
   AdaptiveStepPlasmaSimulation simulation(
       density, reactions, transport, NoReactionEvaluator{},
+      makeTestElectronEnergy(electron_energy_density_),
       AdaptiveTimeClock(0.1), {}, {}, output_options);
 
   simulation.run();
@@ -1834,6 +2131,8 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
                                           NoReactionEvaluator{},
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
                                           AdaptiveTimeClock(0.1), sink);
 
   simulation.run();
@@ -1844,19 +2143,25 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
       "electrostatics.completed",
       "reaction_rates.completed",
       "sources.completed",
+      "electron_energy_source.completed",
       "timestep.selected",
+      "electron_energy.completed",
       "step.completed",
       "step.started",
       "electrostatics.completed",
       "reaction_rates.completed",
       "sources.completed",
+      "electron_energy_source.completed",
       "timestep.selected",
+      "electron_energy.completed",
       "step.completed",
       "step.started",
       "electrostatics.completed",
       "reaction_rates.completed",
       "sources.completed",
+      "electron_energy_source.completed",
       "timestep.selected",
+      "electron_energy.completed",
       "step.completed",
       "run.completed",
   };
@@ -1895,6 +2200,8 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
   trace::OstreamTraceSink sink(output);
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
                                           NoReactionEvaluator{},
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
                                           AdaptiveTimeClock(0.1), sink);
 
   const auto result = simulation.advance();
@@ -1935,7 +2242,10 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
                                               .rate_coefficient = 0.5};
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
-                                          evaluator, AdaptiveTimeClock(0.1));
+                                          evaluator,
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
+                                          AdaptiveTimeClock(0.1));
 
   ASSERT_TRUE(simulation.advance().success());
   ASSERT_TRUE(simulation.hasLastTimeStepProposal());
@@ -1975,7 +2285,10 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
       .observed_electron_density = &observations};
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
-                                          evaluator, AdaptiveTimeClock(0.08));
+                                          evaluator,
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
+                                          AdaptiveTimeClock(0.08));
 
   simulation.run();
 
@@ -2006,6 +2319,7 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
       density, reactions, transport,
       ElectricFieldAwareEvaluator{.reaction = reaction,
                                   .observed_maximum = &evaluator_maximum},
+      makeTestElectronEnergy(electron_energy_density_),
       AdaptiveTimeClock(1e-3));
 
   ASSERT_TRUE(simulation.advance().success());
@@ -2035,7 +2349,10 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
                                               .rate_coefficient = 10.0};
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
-                                          evaluator, AdaptiveTimeClock(1.0));
+                                          evaluator,
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
+                                          AdaptiveTimeClock(1.0));
 
   ASSERT_TRUE(simulation.advance().success());
   const auto& proposal = simulation.lastTimeStepProposal();
@@ -2049,6 +2366,41 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
     EXPECT_NEAR(density[ids.ion][cell], 1.0 - 10.0 * proposal.dt, 1e-12);
     EXPECT_GE(density[ids.electron][cell], 0.0);
     EXPECT_GE(density[ids.ion][cell], 0.0);
+  }
+}
+
+TEST_F(AdaptiveStepPlasmaSimulationTest,
+       ElectronEnergyDepletionLimitsTheCoupledTimeStep) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::ReactionNetwork reactions(species);
+  equation::AdaptiveStepMultiSpeciesDriftDiffusionStepper transport(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.9, .min_dt = 1e-8, .max_dt = 0.5, .max_growth = 2.0});
+  ElectronEnergyConfiguration energy{
+      .energy_density = electron_energy_density_,
+      .electron = ids.electron,
+      .boundary_conditions =
+          makeConstantElectronEnergyBoundaryConditions(1.0),
+      .additional_source_evaluator =
+          ConstantElectronEnergyAdditionalSourceEvaluator{.value = -10.0},
+      .allow_unitless_raw_values = true};
+
+  AdaptiveStepPlasmaSimulation simulation(
+      density, reactions, transport, NoReactionEvaluator{}, std::move(energy),
+      AdaptiveTimeClock(1.0));
+
+  ASSERT_TRUE(simulation.advance().success());
+  const auto& proposal = simulation.lastTimeStepProposal();
+  EXPECT_GT(proposal.dt, 0.0);
+  EXPECT_LT(proposal.dt, 0.1);
+  EXPECT_LT(proposal.positivity_limit, 0.1);
+  for (const double value : electron_energy_density_) {
+    EXPECT_TRUE(std::isfinite(value));
+    EXPECT_GE(value, 0.0);
   }
 }
 
@@ -2069,6 +2421,8 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
                                           NoReactionEvaluator{},
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
                                           AdaptiveTimeClock(0.1));
   simulation.run();
 
@@ -2093,6 +2447,8 @@ TEST_F(AdaptiveStepPlasmaSimulationTest,
 
   AdaptiveStepPlasmaSimulation simulation(density, reactions, transport,
                                           NoReactionEvaluator{},
+                                          makeTestElectronEnergy(
+                                              electron_energy_density_),
                                           AdaptiveTimeClock(0.04));
   ASSERT_TRUE(simulation.advance().success());
   ASSERT_TRUE(simulation.finished());
@@ -2136,7 +2492,9 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
       .rate_coefficient = rate_coefficient};
 
   AdaptiveStepPlasmaSimulation simulation(
-      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time));
+      density, reactions, transport, evaluator,
+      makeTestElectronEnergy(electron_energy_density_),
+      AdaptiveTimeClock(end_time));
 
   simulation.run();
   ASSERT_TRUE(simulation.finished());
@@ -2199,6 +2557,7 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   constexpr auto neutral_density = 2.5e19 * number_density_unit;
   constexpr auto ionization_rate_coefficient =
       1.0e-13 * ionization_coefficient_unit;
+  constexpr auto ionization_energy_loss = 15.76 * eV;
   constexpr auto end_time = 1.0e-6 * s;
   constexpr auto maximum_time_step = 1.0e-6 * s;
 
@@ -2211,6 +2570,8 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
       initial_density.numerical_value_in(number_density_unit);
   constexpr double end_time_s = end_time.numerical_value_in(s);
   constexpr double max_time_step_s = maximum_time_step.numerical_value_in(s);
+  constexpr double ionization_energy_loss_ev =
+      ionization_energy_loss.numerical_value_in(eV);
 
   const auto field_metadata = field::centimetrePlasmaFieldMetadata();
 
@@ -2231,6 +2592,11 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
        .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
   physics::SpeciesCellFields density(mesh_, species.size(), initial_density_cm3,
                                      field_metadata.number_density);
+  constexpr double initial_mean_energy_ev = 2.0;
+  const double initial_energy_density =
+      initial_density_cm3 * initial_mean_energy_ev;
+  field::CellField<double> electron_energy_density(
+      mesh_, initial_energy_density, field_metadata.electron_energy_density);
 
   physics::ReactionNetwork reactions(species);
   const auto ionization =
@@ -2311,8 +2677,19 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
       .write_final = true,
       .overwrite = true,
   };
+  ElectronEnergyConfiguration electron_energy{
+      .energy_density = electron_energy_density,
+      .electron = electron,
+      .boundary_conditions = makeConstantElectronEnergyBoundaryConditions(
+          initial_energy_density),
+      .additional_source_evaluator =
+          ReactionEnergyLossEvaluator{.reaction = ionization,
+                                      .energy_loss_per_reaction =
+                                          ionization_energy_loss_ev}};
   AdaptiveStepPlasmaSimulation simulation(
-      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
+      density, reactions, transport, evaluator,
+      std::move(electron_energy),
+      AdaptiveTimeClock(end_time_s),
       trace_sink,
       trace::StatisticsOptions{true, 1, domain_length_cm * cm, isq::length[cm]},
       field_output_options);
@@ -2324,6 +2701,10 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   EXPECT_NEAR(simulation.time(), end_time_s, 1.0e-18);
   EXPECT_GT(simulation.step(), 1u);
   EXPECT_LT(simulation.lastTimeStep(), max_time_step_s);
+  for (const double source_value : simulation.electronEnergySource()) {
+    EXPECT_TRUE(std::isfinite(source_value));
+    EXPECT_GT(source_value, 0.0);
+  }
   const auto field_output_path =
       field_output_directory / "parallel-plate-400v.vtkhdf";
   ASSERT_TRUE(std::filesystem::is_regular_file(field_output_path));
@@ -2390,6 +2771,21 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   EXPECT_NE(statistics_text.find("charge_density"), std::string::npos);
   EXPECT_NE(statistics_text.find("potential"), std::string::npos);
   EXPECT_NE(statistics_text.find("electric_field_normal"), std::string::npos);
+  EXPECT_NE(statistics_text.find("electron_energy_density"),
+            std::string::npos);
+  EXPECT_NE(statistics_text.find("electron_mean_energy"), std::string::npos);
+  EXPECT_NE(statistics_text.find("electron_energy_source"), std::string::npos);
+  EXPECT_NE(statistics_text.find("electron_mean_energy           | eV"),
+            std::string::npos);
+  EXPECT_NE(statistics_text.find("electron_energy_density        | eV/cm^3"),
+            std::string::npos);
+  EXPECT_NE(statistics_text.find(
+                "electron_energy_source         | eV/(cm^3*s)"),
+            std::string::npos);
+  EXPECT_NE(statistics_text.find("[eV/s]"), std::string::npos);
+  EXPECT_EQ(statistics_text.find("1.60217663399999963e-16W/L"),
+            std::string::npos);
+  EXPECT_NE(statistics_text.find("2e+06 [eV]"), std::string::npos);
   EXPECT_NE(statistics_text.find("VOLUME_SEMANTICS=planar_extrusion"),
             std::string::npos);
   EXPECT_NE(statistics_text.find("PHYSICAL_VOLUME=1 [mL]"), std::string::npos);
@@ -2463,6 +2859,11 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
   physics::SpeciesCellFields uninterrupted_density(
       mesh_, species.size(), initial_density_cm3,
       field_metadata.number_density);
+  constexpr double initial_mean_energy_ev = 2.0;
+  const double initial_energy_density =
+      initial_density_cm3 * initial_mean_energy_ev;
+  field::CellField<double> uninterrupted_energy_density(
+      mesh_, initial_energy_density, field_metadata.electron_energy_density);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper uninterrupted_transport(
       mesh_, species, vacuum_permittivity.numerical_value_in(F / cm), dt,
       makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
@@ -2471,12 +2872,18 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
       std::make_unique<linalg::CholmodSolver>(), field_metadata);
   FixedStepPlasmaSimulation uninterrupted(uninterrupted_density, reactions,
                                           uninterrupted_transport, evaluator,
+                                          makeTestElectronEnergy(
+                                              uninterrupted_energy_density,
+                                              electron,
+                                              initial_energy_density),
                                           FixedStepClock(dt, total_steps));
   uninterrupted.run();
 
   physics::SpeciesCellFields interrupted_density(mesh_, species.size(),
                                                  initial_density_cm3,
                                                  field_metadata.number_density);
+  field::CellField<double> interrupted_energy_density(
+      mesh_, initial_energy_density, field_metadata.electron_energy_density);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper interrupted_transport(
       mesh_, species, vacuum_permittivity.numerical_value_in(F / cm), dt,
       makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
@@ -2489,6 +2896,8 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
   const output::checkpoint::VtkHdfWriter checkpoint_writer;
   FixedStepPlasmaSimulation interrupted(
       interrupted_density, reactions, interrupted_transport, evaluator,
+      makeTestElectronEnergy(interrupted_energy_density, electron,
+                             initial_energy_density),
       FixedStepClock(dt, total_steps), trace::NullTraceSink{}, {}, {},
       {.writer = &checkpoint_writer,
        .path = checkpoint_path,
@@ -2505,6 +2914,8 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
 
   physics::SpeciesCellFields restored_density(mesh_, species.size(), 0.0,
                                               field_metadata.number_density);
+  field::CellField<double> restored_energy_density(
+      mesh_, 0.0, field_metadata.electron_energy_density);
   equation::FixedStepMultiSpeciesDriftDiffusionStepper restored_transport(
       mesh_, species, vacuum_permittivity.numerical_value_in(F / cm), dt,
       makeParallelPlatePotentialBoundaryConditions(left_voltage, right_voltage),
@@ -2513,6 +2924,9 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
       std::make_unique<linalg::CholmodSolver>(), field_metadata);
   FixedStepPlasmaSimulation restored(restored_density, reactions,
                                      restored_transport, evaluator,
+                                     makeTestElectronEnergy(
+                                         restored_energy_density, electron,
+                                         initial_energy_density),
                                      FixedStepClock(dt, total_steps));
   const CountingCheckpointReader checkpoint_reader;
   const auto restored_record =
@@ -2529,6 +2943,8 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
                      interrupted_density[electron][cell]);
     EXPECT_DOUBLE_EQ(restored_density[ion][cell],
                      interrupted_density[ion][cell]);
+    EXPECT_DOUBLE_EQ(restored_energy_density[cell],
+                     interrupted_energy_density[cell]);
   }
   restored.run();
 
@@ -2542,6 +2958,8 @@ TEST_F(PlasmaSimulation64x64CheckpointTest,
                      uninterrupted_density[electron][cell]);
     EXPECT_DOUBLE_EQ(restored_density[ion][cell],
                      uninterrupted_density[ion][cell]);
+    EXPECT_DOUBLE_EQ(restored_energy_density[cell],
+                     uninterrupted_energy_density[cell]);
     EXPECT_DOUBLE_EQ(restored_transport.chargeDensity()[cell],
                      uninterrupted_transport.chargeDensity()[cell]);
     EXPECT_DOUBLE_EQ(restored_transport.potential()[cell],
@@ -2613,6 +3031,11 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
        .transport_model = physics::SpeciesTransportModel::DriftDiffusion});
   physics::SpeciesCellFields density(mesh_, species.size(), initial_density_cm3,
                                      field_metadata.number_density);
+  constexpr double initial_mean_energy_ev = 2.0;
+  const double initial_energy_density =
+      initial_density_cm3 * initial_mean_energy_ev;
+  field::CellField<double> electron_energy_density(
+      mesh_, initial_energy_density, field_metadata.electron_energy_density);
 
   physics::ReactionNetwork reactions(species);
   const auto ionization =
@@ -2643,7 +3066,10 @@ TEST_F(AdaptiveStepPlasmaSimulation64x64Test,
   ASSERT_TRUE(trace_output.is_open());
   trace::OstreamTraceSink trace_sink(trace_output);
   AdaptiveStepPlasmaSimulation simulation(
-      density, reactions, transport, evaluator, AdaptiveTimeClock(end_time_s),
+      density, reactions, transport, evaluator,
+      makeTestElectronEnergy(electron_energy_density, electron,
+                             initial_energy_density),
+      AdaptiveTimeClock(end_time_s),
       trace_sink);
 
   EXPECT_THROW(simulation.run(), std::runtime_error);

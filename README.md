@@ -9,6 +9,7 @@
 - 稳态泊松/扩散方程 $-∇·(ε∇φ)=ρ$
 - 标量对流通量的一阶迎风离散；
 - 瞬态扩散方程的后向欧拉时间推进；
+- 电子能量密度的显式 Scharfetter–Gummel 输运、稳定性与非负性约束；
 - Gmsh 网格的 MOAB 读取、边界物理组及几何/拓扑预处理；
 - 基于官方 `vtkHDFWriter` 的独立 VTKHDF 场输出与 ParaView 可读性验证。
 
@@ -19,7 +20,8 @@
 3. [诊断、日志与中间状态追踪](doc/diagnostics-and-tracing.md)：结构化事件、sink 与仿真耦合；
 4. [Output 持久化](doc/output.md)：VTKHDF dump、metadata、版本化 checkpoint 与恢复；
 5. [Simulation workflow](doc/simulation-workflow.md)：轻量状态机、运行控制与 checkpoint 调度；
-6. [测试用例契约](doc/testcases.md)：全部 223 个测试各自保证的性质。
+6. [电子能量方程](doc/electron-energy-equation.md)：M13 模型、SG 离散与显式稳定性；
+7. [测试用例契约](doc/testcases.md)：全部 243 个测试各自保证的性质。
 
 ## 当前适用范围
 

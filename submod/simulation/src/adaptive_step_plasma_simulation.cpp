@@ -17,10 +17,12 @@ struct AdaptiveStepPlasmaSimulation::Impl {
 
   Impl(physics::SpeciesCellFields& density,
        const physics::ReactionNetwork& reactions, Stepper& stepper,
-       PlasmaReactionRateEvaluator evaluator, AdaptiveTimeClock clock,
+       PlasmaReactionRateEvaluator evaluator,
+       ElectronEnergyConfiguration electron_energy, AdaptiveTimeClock clock,
        trace::AnyTraceSink sink, trace::StatisticsOptions statistics,
        FieldOutputOptions field_output, CheckpointOptions checkpoint)
       : core(density, reactions, stepper, std::move(evaluator),
+             std::move(electron_energy),
              std::move(clock), std::move(sink), statistics,
              std::move(field_output), std::move(checkpoint), "adaptive_step",
              detail::adaptive_step_checkpoint_kind) {}
@@ -51,6 +53,7 @@ struct AdaptiveStepPlasmaSimulation::Impl {
     detail::emitSolverResult(self.trace_sink, self.category,
                              "electrostatics.completed", trace::Severity::Trace,
                              result, self.clock.step());
+    self.electron_energy.refreshMeanEnergy(*self.density);
     self.writeOutput(false);
     self.reaction_rates.fill(0.0);
     self.rate_evaluator(*self.density, self.transport_stepper->potential(),
@@ -76,16 +79,21 @@ struct AdaptiveStepPlasmaSimulation::Impl {
     };
     detail::emitTrace(self.trace_sink, self.category, "sources.completed",
                       trace::Severity::Trace, sources);
+    self.evaluateElectronEnergySource();
     if (self.statistics_options.enabled()) {
       detail::emitPlasmaStatistics(
           self.trace_sink, self.transport_stepper->species(), *self.density,
           self.transport_stepper->chargeDensity(),
           self.transport_stepper->potential(),
           self.transport_stepper->electricFieldNormal(),
+          *self.electron_energy.energy_density,
+          self.electron_energy.mean_energy, self.electron_energy.source,
           self.statistics_options, self.clock.step(), self.clock.time());
     }
-    const auto proposal = self.transport_stepper->advancePrepared(
-        *self.density, self.source, self.clock.remainingTime());
+    const auto proposal = self.transport_stepper->proposeTimeStep(
+        *self.density, self.source, self.clock.remainingTime(),
+        self.electron_energy.maxStableTransportTimeStep(),
+        self.electron_energy.maxPositiveTimeStep());
     const std::array selected{
         trace::TraceAttribute{"step",
                               static_cast<std::uint64_t>(self.clock.step())},
@@ -96,6 +104,10 @@ struct AdaptiveStepPlasmaSimulation::Impl {
     };
     detail::emitTrace(self.trace_sink, self.category, "timestep.selected",
                       trace::Severity::Debug, selected);
+    self.electron_energy.prepareIncrement(proposal.dt);
+    self.transport_stepper->advancePrepared(*self.density, self.source,
+                                            proposal);
+    self.commitElectronEnergy(proposal.dt);
     self.clock.advance(proposal.dt);
     if (self.clock.finished() && self.field_output_options.enabled()) {
       const auto final_result =
@@ -127,11 +139,13 @@ struct AdaptiveStepPlasmaSimulation::Impl {
 AdaptiveStepPlasmaSimulation::AdaptiveStepPlasmaSimulation(
     physics::SpeciesCellFields& density,
     const physics::ReactionNetwork& reactions, Stepper& transport,
-    PlasmaReactionRateEvaluator evaluator, AdaptiveTimeClock clock,
+    PlasmaReactionRateEvaluator evaluator,
+    ElectronEnergyConfiguration electron_energy, AdaptiveTimeClock clock,
     trace::AnyTraceSink sink, trace::StatisticsOptions statistics,
     FieldOutputOptions field_output, CheckpointOptions checkpoint)
     : impl_(std::make_unique<Impl>(
-          density, reactions, transport, std::move(evaluator), std::move(clock),
+          density, reactions, transport, std::move(evaluator),
+          std::move(electron_energy), std::move(clock),
           std::move(sink), statistics, std::move(field_output),
           std::move(checkpoint))) {}
 
@@ -202,6 +216,21 @@ AdaptiveStepPlasmaSimulation::lastTimeStepProposal() const {
   return impl_->core.transport_stepper->lastTimeStepProposal();
 }
 
+const field::CellField<double>&
+AdaptiveStepPlasmaSimulation::electronEnergyDensity() const noexcept {
+  return *impl_->core.electron_energy.energy_density;
+}
+
+const field::CellField<double>&
+AdaptiveStepPlasmaSimulation::electronMeanEnergy() const noexcept {
+  return impl_->core.electron_energy.mean_energy;
+}
+
+const field::CellField<double>&
+AdaptiveStepPlasmaSimulation::electronEnergySource() const noexcept {
+  return impl_->core.electron_energy.source;
+}
+
 output::OutputRecord AdaptiveStepPlasmaSimulation::saveCheckpoint() const {
   if (!impl_->core.checkpoint_options.enabled()) {
     throw std::logic_error("simulation checkpoint output is disabled");
@@ -232,8 +261,18 @@ output::OutputRecord AdaptiveStepPlasmaSimulation::restoreCheckpoint(
   physics::SpeciesCellFields restored_density(
       self.density->mesh(), self.density->size(), 0.0,
       (*self.density)[physics::SpeciesId{0}].metadata());
+  field::CellField<double> restored_energy(
+      self.density->mesh(), 0.0,
+      self.electron_energy.energy_density->metadata());
   auto targets = detail::plasmaCheckpointTargets(
       restored_density, self.transport_stepper->species());
+  targets.push_back(
+      {.field = &restored_energy,
+       .key = detail::electronEnergyDensityCheckpointKey(
+           self.electron_energy.electron,
+           self.transport_stepper->species()
+               .at(self.electron_energy.electron)
+               .name)});
   double schema_version{};
   double workflow_kind{};
   double previous_dt{};
@@ -259,11 +298,19 @@ output::OutputRecord AdaptiveStepPlasmaSimulation::restoreCheckpoint(
   const auto restored_step = static_cast<std::size_t>(record.stamp.step);
   AdaptiveTimeClock restored_clock(self.clock.endTime(), record.stamp.time,
                                    restored_step);
+  field::CellField<double> restored_mean_energy(
+      self.density->mesh(), 0.0,
+      self.transport_stepper->fieldMetadata().electron_mean_energy);
+  physics::computeElectronMeanEnergy(
+      restored_energy, restored_density[self.electron_energy.electron],
+      self.electron_energy.density_floor, restored_mean_energy);
   self.transport_stepper->restoreTimeStepHistory(previous_dt);
   for (std::size_t i = 0; i < self.density->size(); ++i) {
     const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
     (*self.density)[id] = std::move(restored_density[id]);
   }
+  *self.electron_energy.energy_density = std::move(restored_energy);
+  self.electron_energy.mean_energy = std::move(restored_mean_energy);
   self.clock = restored_clock;
   return record;
 }

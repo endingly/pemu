@@ -94,6 +94,21 @@ FixedStepMultiSpeciesDriftDiffusionStepper::updateElectrostatics(
   return result;
 }
 
+void FixedStepMultiSpeciesDriftDiffusionStepper::computeParticleFluxNormal(
+    const physics::SpeciesCellFields& density, physics::SpeciesId id,
+    field::FaceField<double>& normal_flux) const {
+  validateFields(density);
+  if (!electrostatics_ready_) {
+    throw std::logic_error(
+        "electrostatics must be updated before computing particle flux");
+  }
+  const auto index = static_cast<std::size_t>(id.value);
+  if (index >= transport_steppers_.size() || !transport_steppers_[index]) {
+    throw std::invalid_argument("particle flux requires a transported species");
+  }
+  transport_steppers_[index]->computeNormalFlux(density[id], normal_flux);
+}
+
 void FixedStepMultiSpeciesDriftDiffusionStepper::advanceTransport(
     physics::SpeciesCellFields& density,
     const physics::SpeciesCellFields& source) {
@@ -105,11 +120,39 @@ void FixedStepMultiSpeciesDriftDiffusionStepper::advanceTransport(
         "electrostatics must be updated before advancing transport");
   }
 
-  // Preserve atomicity: validate every fixed-step CFL before changing any
-  // species field.
+  // Preserve atomicity: validate every fixed-step CFL and candidate state
+  // before changing any species field.
   for (const auto& stepper : transport_steppers_) {
     if (stepper && stepper->maxTransportCfl() > 1.0) {
       throw std::runtime_error("multi-species explicit transport CFL violated");
+    }
+  }
+
+  increments_.fill(0.0);
+  for (std::size_t i = 0; i < species_->size(); ++i) {
+    if (!transport_steppers_[i]) {
+      continue;
+    }
+    const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
+    transport_steppers_[i]->computeIncrement(density[id], source[id],
+                                             increments_[id]);
+  }
+
+  for (std::size_t i = 0; i < species_->size(); ++i) {
+    if (!transport_steppers_[i]) {
+      continue;
+    }
+    const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
+    for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+      const double candidate = density[id][cell] + increments_[id][cell];
+      const double scale = std::max(1.0, std::abs(density[id][cell]));
+      if (!std::isfinite(candidate) || candidate < -1e-12 * scale) {
+        throw std::runtime_error(
+            "multi-species update would produce negative density");
+      }
+      if (candidate < 0.0) {
+        increments_[id][cell] = -density[id][cell];
+      }
     }
   }
 
@@ -118,7 +161,9 @@ void FixedStepMultiSpeciesDriftDiffusionStepper::advanceTransport(
       continue;
     }
     const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
-    transport_steppers_[i]->step(density[id], source[id]);
+    for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+      density[id][cell] += increments_[id][cell];
+    }
   }
 
   electrostatics_ready_ = false;
@@ -145,6 +190,7 @@ FixedStepMultiSpeciesDriftDiffusionStepper::
       electric_field_normal_(mesh, 0.0, field_metadata_.electric_field),
       drift_velocity_(mesh, species.size(), 0.0,
                       field_metadata_.drift_velocity),
+      increments_(mesh, species.size(), 0.0, field_metadata_.number_density),
       poisson_solver_(discretization::PoissonFvm(mesh, charge_density_,
                                                  permittivity, potential_bc_),
                       validateBackend(std::move(poisson_backend)),

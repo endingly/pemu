@@ -10,6 +10,7 @@
 #include <pemu/mesh/i_mesh.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace pemu::equation {
@@ -28,7 +29,8 @@ class FixedStepExplicitSpeciesContinuityStepper {
         diffusivity_(diffusivity),
         dt_(dt),
         flux_(mesh, 0.0),
-        divergence_(mesh, 0.0) {
+        divergence_(mesh, 0.0),
+        increment_(mesh, 0.0) {
     if (&normal_drift_velocity.mesh() != &mesh) {
       throw std::invalid_argument("drift velocity belongs to another mesh");
     }
@@ -84,15 +86,63 @@ class FixedStepExplicitSpeciesContinuityStepper {
   [[nodiscard]] double timeStep() const noexcept { return dt_; }
   [[nodiscard]] double diffusivity() const noexcept { return diffusivity_; }
 
-  void step(field::CellField<double>& density,
-            const field::CellField<double>& source) {
-    validateFields(density, source);
+  /** @brief Computes the SG particle flux used by the continuity update. */
+  void computeNormalFlux(const field::CellField<double>& density,
+                         field::FaceField<double>& normal_flux) const {
+    if (&density.mesh() != mesh_) {
+      throw std::invalid_argument("density belongs to another mesh");
+    }
+    if (&normal_flux.mesh() != mesh_) {
+      throw std::invalid_argument("normal flux belongs to another mesh");
+    }
     discretization::operators::scharfetterGummelFlux(
-        density, *normal_drift_velocity_, diffusivity_, *bc_, flux_);
+        density, *normal_drift_velocity_, diffusivity_, *bc_, normal_flux);
+  }
+
+  /** @brief Computes one fixed-step increment without changing density. */
+  void computeIncrement(const field::CellField<double>& density,
+                        const field::CellField<double>& source,
+                        field::CellField<double>& increment) {
+    validateFields(density, source);
+    if (&increment.mesh() != mesh_) {
+      throw std::invalid_argument("density increment belongs to another mesh");
+    }
+    computeNormalFlux(density, flux_);
     discretization::operators::divergence(flux_, divergence_);
 
     for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
-      density[cell] += dt_ * (source[cell] - divergence_[cell]);
+      if (!std::isfinite(density[cell]) || density[cell] < 0.0) {
+        throw std::invalid_argument(
+            "species density must be finite and non-negative");
+      }
+      if (!std::isfinite(source[cell])) {
+        throw std::invalid_argument("species source must be finite");
+      }
+      increment[cell] = dt_ * (source[cell] - divergence_[cell]);
+      if (!std::isfinite(increment[cell])) {
+        throw std::runtime_error("species density increment is not finite");
+      }
+    }
+  }
+
+  /** @brief Validates and commits one non-negative fixed-step update. */
+  void step(field::CellField<double>& density,
+            const field::CellField<double>& source) {
+    computeIncrement(density, source, increment_);
+
+    for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+      const double candidate = density[cell] + increment_[cell];
+      const double scale = std::max(1.0, std::abs(density[cell]));
+      if (!std::isfinite(candidate) || candidate < -1e-12 * scale) {
+        throw std::runtime_error(
+            "species update would produce negative density");
+      }
+      if (candidate < 0.0) {
+        increment_[cell] = -density[cell];
+      }
+    }
+    for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
+      density[cell] += increment_[cell];
     }
   }
 
@@ -114,6 +164,7 @@ class FixedStepExplicitSpeciesContinuityStepper {
   double dt_;
   field::FaceField<double> flux_;
   field::CellField<double> divergence_;
+  field::CellField<double> increment_;
 };
 
 }  // namespace pemu::equation

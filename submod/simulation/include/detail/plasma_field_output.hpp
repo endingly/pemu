@@ -69,6 +69,8 @@ template <typename Stepper>
 [[nodiscard]]
 output::OutputRecord writePlasmaFieldSnapshot(
     const physics::SpeciesCellFields& density, const Stepper& stepper,
+    const field::CellField<double>& electron_energy_density,
+    const field::CellField<double>& electron_mean_energy,
     const FieldOutputOptions& options, output::dump::ISeries& series,
     output::OutputStamp stamp) {
   if (!options.enabled()) {
@@ -77,7 +79,7 @@ output::OutputRecord writePlasmaFieldSnapshot(
   }
 
   std::vector<output::dump::CellFieldSelection> cell_fields;
-  cell_fields.reserve(density.size() + 2);
+  cell_fields.reserve(density.size() + 4);
   std::vector<output::dump::FaceFieldSelection> face_fields;
   face_fields.reserve(density.size() + 1);
 
@@ -101,6 +103,11 @@ output::OutputRecord writePlasmaFieldSnapshot(
       {.field = &stepper.chargeDensity(), .name = "charge_density"});
   cell_fields.push_back(
       {.field = &stepper.potential(), .name = "electric_potential"});
+  cell_fields.push_back(
+      {.field = &electron_energy_density,
+       .name = "electron_energy_density"});
+  cell_fields.push_back(
+      {.field = &electron_mean_energy, .name = "electron_mean_energy"});
   face_fields.push_back(
       {.field = &stepper.electricFieldNormal(),
        .name = "normal_electric_field",

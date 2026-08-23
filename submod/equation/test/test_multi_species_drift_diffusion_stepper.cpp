@@ -764,6 +764,28 @@ TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
   expectFieldEqualsSnapshot(density[ids.ion], ion_before);
 }
 
+TEST_F(FixedStepMultiSpeciesDriftDiffusionStepperTest,
+       SourcePositivityFailureDoesNotPartiallyUpdateSpecies) {
+  physics::SpeciesSet species;
+  const auto ids = addElectronAndIon(species, 1.0, 1.0, 0.1, 0.1);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::SpeciesCellFields source(mesh_, species.size(), 0.0);
+  source[ids.electron].fill(-20.0);
+  source[ids.ion].fill(1.0);
+
+  FixedStepMultiSpeciesDriftDiffusionStepper stepper(
+      mesh_, species, 1.0, 0.1, makeZeroPotentialBoundaryConditions(),
+      makeConstantSpeciesBoundaryConditions(species.size(), 1.0),
+      std::make_unique<linalg::CholmodSolver>());
+  ASSERT_TRUE(stepper.updateElectrostatics(density).success());
+  const auto electron_before = snapshot(density[ids.electron]);
+  const auto ion_before = snapshot(density[ids.ion]);
+
+  EXPECT_THROW(stepper.advanceTransport(density, source), std::runtime_error);
+  EXPECT_EQ(snapshot(density[ids.electron]), electron_before);
+  EXPECT_EQ(snapshot(density[ids.ion]), ion_before);
+}
+
 // ============================================================
 // 7. SpeciesCellFields with the wrong number of species must
 //    be rejected.

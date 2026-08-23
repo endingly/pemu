@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <pemu/equation/detail/explicit_multi_species_drift_diffusion_operator.hpp>
@@ -71,24 +73,53 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
     return transport_operator_.updateElectrostatics(density);
   }
 
-  // ========================================================
-  // Determine dt WITHOUT advancing.
-  //
-  // Requires prepareElectrostatics() first.
-  // ========================================================
-
+  /**
+   * @brief Selects a timestep without advancing the prepared state.
+   *
+   * Optional coupled limits let a workflow include equations such as electron
+   * energy in the same controller decision. This method requires a successful
+   * prepareElectrostatics() call for the current density.
+   */
   [[nodiscard]]
   time_integration::TimeStepProposal proposeTimeStep(
       const physics::SpeciesCellFields& density,
-      const physics::SpeciesCellFields& source, double remaining_time) {
+      const physics::SpeciesCellFields& source, double remaining_time,
+      double coupled_transport_limit =
+          std::numeric_limits<double>::infinity(),
+      double coupled_positivity_limit =
+          std::numeric_limits<double>::infinity()) {
     const double transport_limit =
-        transport_operator_.maxStableTransportTimeStep();
+        std::min(transport_operator_.maxStableTransportTimeStep(),
+                 coupled_transport_limit);
 
     const double positivity_limit =
-        transport_operator_.positivityTimeStepLimit(density, source);
+        std::min(transport_operator_.positivityTimeStepLimit(density, source),
+                 coupled_positivity_limit);
 
     return controller_.propose(transport_limit, positivity_limit, previous_dt_,
                                remaining_time);
+  }
+
+  /**
+   * @brief Advances species with a proposal already selected for all coupled
+   * equations and records it as adaptive history.
+   */
+  void advancePrepared(
+      physics::SpeciesCellFields& density,
+      const physics::SpeciesCellFields& source,
+      const time_integration::TimeStepProposal& proposal) {
+    if (!std::isfinite(proposal.dt) || proposal.dt <= 0.0) {
+      throw std::invalid_argument(
+          "prepared adaptive timestep must be finite and positive");
+    }
+
+    transport_operator_.advanceTransport(density, source, proposal.dt);
+
+    previous_dt_ = proposal.dt;
+
+    last_proposal_ = proposal;
+
+    has_last_proposal_ = true;
   }
 
   // ========================================================
@@ -105,13 +136,7 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
       const physics::SpeciesCellFields& source, double remaining_time) {
     const auto proposal = proposeTimeStep(density, source, remaining_time);
 
-    transport_operator_.advanceTransport(density, source, proposal.dt);
-
-    previous_dt_ = proposal.dt;
-
-    last_proposal_ = proposal;
-
-    has_last_proposal_ = true;
+    advancePrepared(density, source, proposal);
 
     return proposal;
   }
@@ -209,6 +234,13 @@ class AdaptiveStepMultiSpeciesDriftDiffusionStepper {
   const field::FaceField<double>& driftVelocityNormal(
       physics::SpeciesId id) const {
     return transport_operator_.driftVelocityNormal(id);
+  }
+
+  /** @brief Computes one species' current SG particle flux without advancing. */
+  void computeParticleFluxNormal(
+      const physics::SpeciesCellFields& density, physics::SpeciesId id,
+      field::FaceField<double>& normal_flux) const {
+    transport_operator_.computeParticleFluxNormal(density, id, normal_flux);
   }
 
   [[nodiscard]]

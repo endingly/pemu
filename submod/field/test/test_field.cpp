@@ -218,6 +218,8 @@ TEST_F(FieldTest, MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata) {
       pemu::unit::bridgeReference(isq::electric_charge_density[C / cubic(cm)]);
   constexpr auto electric_field = pemu::unit::bridgeReference(
       pemu::unit::plasma_quantity::normal_electric_field_strength[V / cm]);
+  constexpr auto energy_density = pemu::unit::bridgeReference(
+      pemu::unit::plasma_quantity::electron_energy_density[eV / cubic(cm)]);
 
   static_assert(density.kind() ==
                 pemu::unit::QuantityKind::particle_number_density);
@@ -228,11 +230,16 @@ TEST_F(FieldTest, MpUnitsBridgeCoversCanonicalPlasmaFieldMetadata) {
   static_assert(electric_field.kind() ==
                 pemu::unit::QuantityKind::normal_electric_field_strength);
   EXPECT_EQ(electric_field.unit(), units::precise::V / units::precise::cm);
+  static_assert(energy_density.kind() ==
+                pemu::unit::QuantityKind::electron_energy_density);
+  EXPECT_EQ(energy_density.unit(),
+            units::precise::energy::eV / units::precise::cm.pow(3));
 
   EXPECT_EQ(pemu::to_string(density.kind()), "particle_number_density");
   EXPECT_EQ(pemu::to_string(charge.kind()), "electric_charge_density");
   EXPECT_EQ(pemu::to_string(electric_field.kind()),
             "normal_electric_field_strength");
+  EXPECT_EQ(pemu::to_string(energy_density.kind()), "electron_energy_density");
 }
 
 TEST_F(FieldTest, QuantityBoundaryConvertsToFieldStorageUnit) {

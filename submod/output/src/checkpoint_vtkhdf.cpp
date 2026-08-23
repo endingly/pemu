@@ -122,9 +122,7 @@ class TemporaryCheckpointFile {
 
 [[nodiscard]] std::string unitName(
     const unit::PhysicalQuantityMetadata& metadata) {
-  return metadata.unit() == units::precise::one
-             ? std::string{"1"}
-             : units::to_string(metadata.unit());
+  return pemu::to_string(metadata.unit());
 }
 
 [[nodiscard]] bool isReserved(std::string_view name) {
@@ -345,9 +343,7 @@ template <typename Value>
 
 [[nodiscard]] unit::QuantityKind parseQuantityKind(std::string_view value) {
   for (unsigned int raw = 0;
-       raw <=
-       static_cast<unsigned int>(unit::QuantityKind::normal_drift_velocity);
-       ++raw) {
+       raw < static_cast<unsigned int>(unit::QuantityKind::count); ++raw) {
     const auto kind = static_cast<unit::QuantityKind>(raw);
     if (pemu::to_string(kind) == value) {
       return kind;

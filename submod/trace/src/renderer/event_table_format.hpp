@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pemu/trace/trace.hpp>
+#include <pemu/unit/quantity_metadata.hpp>
 
 #include <fmt/format.h>
 
@@ -50,7 +51,7 @@ void appendUnit(Buffer& output, units::precise_unit unit) {
   if (unit == units::precise::one) {
     fmt::format_to(std::back_inserter(output), " [1]");
   } else {
-    fmt::format_to(std::back_inserter(output), " [{}]", units::to_string(unit));
+    fmt::format_to(std::back_inserter(output), " [{}]", pemu::to_string(unit));
   }
 }
 

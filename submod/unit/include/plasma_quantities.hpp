@@ -19,5 +19,10 @@ QUANTITY_SPEC(normal_electric_field_strength,
 QUANTITY_SPEC(normal_drift_velocity,
               mp_units::isq::length / mp_units::isq::time,
               mp_units::quantity_character::real_scalar);
+QUANTITY_SPEC(electron_mean_energy, mp_units::isq::energy);
+QUANTITY_SPEC(electron_energy_density,
+              electron_mean_energy / mp_units::isq::volume);
+QUANTITY_SPEC(electron_energy_density_rate,
+              electron_energy_density / mp_units::isq::time);
 
 }  // namespace pemu::unit::plasma_quantity

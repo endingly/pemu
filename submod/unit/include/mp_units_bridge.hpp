@@ -71,6 +71,20 @@ template <typename QuantitySpec>
       std::same_as<QS, std::remove_cvref_t<
                            decltype(plasma_quantity::normal_drift_velocity)>>) {
     return QuantityKind::normal_drift_velocity;
+  } else if constexpr (
+      std::same_as<QS, std::remove_cvref_t<
+                           decltype(plasma_quantity::electron_mean_energy)>>) {
+    return QuantityKind::electron_mean_energy;
+  } else if constexpr (
+      std::same_as<QS,
+                   std::remove_cvref_t<
+                       decltype(plasma_quantity::electron_energy_density)>>) {
+    return QuantityKind::electron_energy_density;
+  } else if constexpr (
+      std::same_as<
+          QS, std::remove_cvref_t<
+                  decltype(plasma_quantity::electron_energy_density_rate)>>) {
+    return QuantityKind::electron_energy_density_rate;
   } else {
     static_assert(dependent_false<QS>,
                   "mp-units quantity specification is not bridged to "
@@ -120,6 +134,15 @@ template <typename MpUnit>
     return units::precise::C / units::precise::cm.pow(3);
   } else if constexpr (std::same_as<U, std::remove_cvref_t<decltype(V / cm)>>) {
     return units::precise::V / units::precise::cm;
+  } else if constexpr (std::same_as<U, std::remove_cvref_t<decltype(eV)>>) {
+    return units::precise::energy::eV;
+  } else if constexpr (std::same_as<
+                           U, std::remove_cvref_t<decltype(eV / cubic(cm))>>) {
+    return units::precise::energy::eV / units::precise::cm.pow(3);
+  } else if constexpr (std::same_as<U, std::remove_cvref_t<
+                                           decltype(eV / (cubic(cm) * s))>>) {
+    return units::precise::energy::eV /
+           (units::precise::cm.pow(3) * units::precise::s);
   } else {
     static_assert(dependent_false<U>,
                   "mp-units unit is not bridged to LLNL units::precise_unit");

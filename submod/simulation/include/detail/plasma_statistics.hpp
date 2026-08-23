@@ -53,7 +53,10 @@ inline void validatePlasmaStatisticsConfiguration(
     const physics::SpeciesCellFields& density,
     const field::CellField<double>& charge_density,
     const field::CellField<double>& potential,
-    const field::FaceField<double>& electric_field_normal) {
+    const field::FaceField<double>& electric_field_normal,
+    const field::CellField<double>& electron_energy_density,
+    const field::CellField<double>& electron_mean_energy,
+    const field::CellField<double>& electron_energy_source) {
   if (!options.enabled()) {
     return;
   }
@@ -72,7 +75,13 @@ inline void validatePlasmaStatisticsConfiguration(
                        unit::QuantityKind::electric_charge_density) ||
       !hasQuantityKind(potential, unit::QuantityKind::electric_potential) ||
       !hasQuantityKind(electric_field_normal,
-                       unit::QuantityKind::normal_electric_field_strength)) {
+                       unit::QuantityKind::normal_electric_field_strength) ||
+      !hasQuantityKind(electron_energy_density,
+                       unit::QuantityKind::electron_energy_density) ||
+      !hasQuantityKind(electron_mean_energy,
+                       unit::QuantityKind::electron_mean_energy) ||
+      !hasQuantityKind(electron_energy_source,
+                       unit::QuantityKind::electron_energy_density_rate)) {
     throw std::invalid_argument(
         "plasma statistics require physical field metadata");
   }
@@ -98,6 +107,49 @@ inline void validatePlasmaStatisticsConfiguration(
                  severity == trace::Severity::Critical
              ? trace::EventKind::Diagnostic
              : trace::EventKind::Trace;
+}
+
+/** @brief Emits one cell-centred electron-energy statistics row. */
+template <trace::TraceSink Sink>
+void emitElectronEnergyFieldStatistics(
+    Sink& sink, const field::CellField<double>& values,
+    std::string_view category,
+    const trace::PhysicalVolumeSemantics& physical_volume, std::size_t step,
+    double time, bool negative_values_are_invalid) noexcept {
+  const auto statistics = cellStatistics(values, physical_volume);
+  const auto severity =
+      statisticsSeverity(statistics, negative_values_are_invalid);
+  const auto value_unit = statistics.value_unit;
+  const auto weight_unit = statistics.weight_unit;
+  const auto integral_unit = statistics.integralUnit();
+  const std::array attributes{
+      trace::TraceAttribute{"step", static_cast<std::uint64_t>(step)},
+      trace::TraceAttribute{"time", time, units::precise::s},
+      trace::TraceAttribute{"samples", statistics.sample_count},
+      trace::TraceAttribute{"non_finite", statistics.non_finite_count},
+      trace::TraceAttribute{"negative", statistics.negative_count},
+      trace::TraceAttribute{"minimum", statistics.minimum, value_unit},
+      trace::TraceAttribute{"maximum", statistics.maximum, value_unit},
+      trace::TraceAttribute{"max_abs", statistics.max_abs, value_unit},
+      trace::TraceAttribute{"physical_volume", statistics.weight_sum,
+                            weight_unit},
+      trace::TraceAttribute{"volume_mean", statistics.weighted_mean,
+                            value_unit},
+      trace::TraceAttribute{"volume_integral", statistics.integral,
+                            integral_unit},
+      trace::TraceAttribute{"l1_volume_integral", statistics.l1_integral,
+                            integral_unit},
+      trace::TraceAttribute{"rms", statistics.weighted_rms, value_unit},
+      trace::TraceAttribute{"volume_semantics",
+                            std::string_view{physical_volume.name()}},
+  };
+  sink({.kind = statisticsKind(severity),
+        .output_channel = trace::OutputChannel::Statistics,
+        .domain = trace::DiagDomain::physics,
+        .category = category,
+        .name = "statistics",
+        .severity = severity,
+        .attributes = attributes});
 }
 
 template <trace::TraceSink Sink>
@@ -269,13 +321,17 @@ void emitElectricFieldStatistics(
 }
 
 template <trace::TraceSink Sink>
-void emitPlasmaStatistics(Sink& sink, const physics::SpeciesSet& species,
-                          const physics::SpeciesCellFields& density,
-                          const field::CellField<double>& charge_density,
-                          const field::CellField<double>& potential,
-                          const field::FaceField<double>& electric_field_normal,
-                          const trace::StatisticsOptions& options,
-                          std::size_t step, double time) noexcept {
+void emitPlasmaStatistics(
+    Sink& sink, const physics::SpeciesSet& species,
+    const physics::SpeciesCellFields& density,
+    const field::CellField<double>& charge_density,
+    const field::CellField<double>& potential,
+    const field::FaceField<double>& electric_field_normal,
+    const field::CellField<double>& electron_energy_density,
+    const field::CellField<double>& electron_mean_energy,
+    const field::CellField<double>& electron_energy_source,
+    const trace::StatisticsOptions& options, std::size_t step,
+    double time) noexcept {
   if (!options.shouldSample(step)) {
     return;
   }
@@ -290,6 +346,15 @@ void emitPlasmaStatistics(Sink& sink, const physics::SpeciesSet& species,
   emitPotentialStatistics(sink, potential, physical_volume, step, time);
   emitElectricFieldStatistics(sink, electric_field_normal, physical_volume,
                               step, time);
+  emitElectronEnergyFieldStatistics(sink, electron_energy_density,
+                                    "electron_energy_density", physical_volume,
+                                    step, time, true);
+  emitElectronEnergyFieldStatistics(sink, electron_mean_energy,
+                                    "electron_mean_energy", physical_volume,
+                                    step, time, true);
+  emitElectronEnergyFieldStatistics(sink, electron_energy_source,
+                                    "electron_energy_source", physical_volume,
+                                    step, time, false);
 }
 
 }  // namespace pemu::simulation::detail

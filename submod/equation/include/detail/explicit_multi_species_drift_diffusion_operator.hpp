@@ -465,6 +465,20 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
     return drift_velocity_[id];
   }
 
+  /** @brief Computes one species' current SG particle flux without advancing. */
+  void computeParticleFluxNormal(
+      const physics::SpeciesCellFields& density, physics::SpeciesId id,
+      field::FaceField<double>& normal_flux) const {
+    validateFields(density);
+    requireElectrostaticsReady();
+    const auto* stepper = transportStepper(id);
+    if (stepper == nullptr) {
+      throw std::invalid_argument(
+          "particle flux requires a transported species");
+    }
+    stepper->computeNormalFlux(density[id], normal_flux);
+  }
+
   [[nodiscard]]
   const physics::SpeciesCellFields& transportLossRate() const noexcept {
     return transport_loss_rate_;

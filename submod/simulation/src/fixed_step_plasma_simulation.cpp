@@ -18,10 +18,12 @@ struct FixedStepPlasmaSimulation::Impl {
 
   Impl(physics::SpeciesCellFields& density,
        const physics::ReactionNetwork& reactions, Stepper& stepper,
-       PlasmaReactionRateEvaluator evaluator, FixedStepClock clock,
+       PlasmaReactionRateEvaluator evaluator,
+       ElectronEnergyConfiguration electron_energy, FixedStepClock clock,
        trace::AnyTraceSink sink, trace::StatisticsOptions statistics,
        FieldOutputOptions field_output, CheckpointOptions checkpoint)
       : core(density, reactions, stepper, std::move(evaluator),
+             std::move(electron_energy),
              std::move(clock), std::move(sink), statistics,
              std::move(field_output), std::move(checkpoint), "fixed_step",
              detail::fixed_step_checkpoint_kind) {
@@ -59,6 +61,7 @@ struct FixedStepPlasmaSimulation::Impl {
     detail::emitSolverResult(self.trace_sink, self.category,
                              "electrostatics.completed", trace::Severity::Trace,
                              result, self.clock.step());
+    self.electron_energy.refreshMeanEnergy(*self.density);
     self.writeOutput(false);
     self.reaction_rates.fill(0.0);
     self.rate_evaluator(*self.density, self.transport_stepper->potential(),
@@ -84,15 +87,20 @@ struct FixedStepPlasmaSimulation::Impl {
     };
     detail::emitTrace(self.trace_sink, self.category, "sources.completed",
                       trace::Severity::Trace, source_attributes);
+    self.evaluateElectronEnergySource();
+    self.electron_energy.prepareIncrement(self.clock.timeStep());
     if (self.statistics_options.enabled()) {
       detail::emitPlasmaStatistics(
           self.trace_sink, self.transport_stepper->species(), *self.density,
           self.transport_stepper->chargeDensity(),
           self.transport_stepper->potential(),
           self.transport_stepper->electricFieldNormal(),
+          *self.electron_energy.energy_density,
+          self.electron_energy.mean_energy, self.electron_energy.source,
           self.statistics_options, self.clock.step(), self.clock.time());
     }
     self.transport_stepper->advanceTransport(*self.density, self.source);
+    self.commitElectronEnergy(self.clock.timeStep());
     self.clock.advance();
     if (self.clock.finished() && self.field_output_options.enabled()) {
       const auto final_result =
@@ -124,11 +132,13 @@ struct FixedStepPlasmaSimulation::Impl {
 FixedStepPlasmaSimulation::FixedStepPlasmaSimulation(
     physics::SpeciesCellFields& density,
     const physics::ReactionNetwork& reactions, Stepper& transport,
-    PlasmaReactionRateEvaluator evaluator, FixedStepClock clock,
+    PlasmaReactionRateEvaluator evaluator,
+    ElectronEnergyConfiguration electron_energy, FixedStepClock clock,
     trace::AnyTraceSink sink, trace::StatisticsOptions statistics,
     FieldOutputOptions field_output, CheckpointOptions checkpoint)
     : impl_(std::make_unique<Impl>(
-          density, reactions, transport, std::move(evaluator), std::move(clock),
+          density, reactions, transport, std::move(evaluator),
+          std::move(electron_energy), std::move(clock),
           std::move(sink), statistics, std::move(field_output),
           std::move(checkpoint))) {}
 
@@ -186,6 +196,21 @@ bool FixedStepPlasmaSimulation::finished() const noexcept {
   return impl_->core.clock.finished();
 }
 
+const field::CellField<double>&
+FixedStepPlasmaSimulation::electronEnergyDensity() const noexcept {
+  return *impl_->core.electron_energy.energy_density;
+}
+
+const field::CellField<double>&
+FixedStepPlasmaSimulation::electronMeanEnergy() const noexcept {
+  return impl_->core.electron_energy.mean_energy;
+}
+
+const field::CellField<double>&
+FixedStepPlasmaSimulation::electronEnergySource() const noexcept {
+  return impl_->core.electron_energy.source;
+}
+
 output::OutputRecord FixedStepPlasmaSimulation::saveCheckpoint() const {
   if (!impl_->core.checkpoint_options.enabled()) {
     throw std::logic_error("simulation checkpoint output is disabled");
@@ -211,8 +236,18 @@ output::OutputRecord FixedStepPlasmaSimulation::restoreCheckpoint(
   physics::SpeciesCellFields restored_density(
       self.density->mesh(), self.density->size(), 0.0,
       (*self.density)[physics::SpeciesId{0}].metadata());
+  field::CellField<double> restored_energy(
+      self.density->mesh(), 0.0,
+      self.electron_energy.energy_density->metadata());
   auto targets = detail::plasmaCheckpointTargets(
       restored_density, self.transport_stepper->species());
+  targets.push_back(
+      {.field = &restored_energy,
+       .key = detail::electronEnergyDensityCheckpointKey(
+           self.electron_energy.electron,
+           self.transport_stepper->species()
+               .at(self.electron_energy.electron)
+               .name)});
   double schema_version{};
   double workflow_kind{};
   const auto scalars =
@@ -237,10 +272,18 @@ output::OutputRecord FixedStepPlasmaSimulation::restoreCheckpoint(
     throw std::invalid_argument(
         "checkpoint time does not match fixed simulation step");
   }
+  field::CellField<double> restored_mean_energy(
+      self.density->mesh(), 0.0,
+      self.transport_stepper->fieldMetadata().electron_mean_energy);
+  physics::computeElectronMeanEnergy(
+      restored_energy, restored_density[self.electron_energy.electron],
+      self.electron_energy.density_floor, restored_mean_energy);
   for (std::size_t i = 0; i < self.density->size(); ++i) {
     const physics::SpeciesId id{static_cast<std::uint32_t>(i)};
     (*self.density)[id] = std::move(restored_density[id]);
   }
+  *self.electron_energy.energy_density = std::move(restored_energy);
+  self.electron_energy.mean_energy = std::move(restored_mean_energy);
   self.clock = FixedStepClock(self.clock.timeStep(), self.clock.totalSteps(),
                               restored_step);
   return record;

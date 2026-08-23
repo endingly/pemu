@@ -1,18 +1,25 @@
 #pragma once
 
+#include <pemu/linalg/i_solver.hpp>
 #include <pemu/output/dump/trace.hpp>
+#include <pemu/physics/electron_energy.hpp>
 #include <pemu/simulation/checkpoint.hpp>
 #include <pemu/simulation/detail/plasma_checkpoint.hpp>
 #include <pemu/simulation/detail/plasma_field_output.hpp>
 #include <pemu/simulation/detail/plasma_statistics.hpp>
+#include <pemu/simulation/electron_energy.hpp>
 #include <pemu/simulation/plasma_reaction_rate_evaluator.hpp>
 #include <pemu/simulation/simulation_state.hpp>
 #include <pemu/trace/any_trace_sink.hpp>
 
+#include <llnl-units/units.hpp>
+
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -92,6 +99,283 @@ inline void validatePlasmaWorkflowSchema(double schema_version,
   }
 }
 
+/** @brief Owns the mandatory electron-energy operator and workflow workspaces. */
+template <typename Stepper>
+struct ElectronEnergySubsystem {
+  field::CellField<double>* energy_density;
+  physics::SpeciesId electron;
+  double density_floor;
+  equation::ExplicitElectronEnergyStepper stepper;
+  double field_power_conversion_factor;
+  ElectronEnergyAdditionalSourceEvaluator additional_source_evaluator;
+  field::CellField<double> mean_energy;
+  field::FaceField<double> particle_flux_normal;
+  field::CellField<double> additional_source;
+  field::CellField<double> source;
+  field::CellField<double> increment;
+
+  /** @brief Validates configuration and creates the energy transport operator. */
+  [[nodiscard]] static equation::ExplicitElectronEnergyStepper makeStepper(
+      const ElectronEnergyConfiguration& configuration,
+      const physics::SpeciesCellFields& density, Stepper& transport) {
+    if (&configuration.energy_density.mesh() != &density.mesh() ||
+        &density.mesh() != &transport.mesh()) {
+      throw std::invalid_argument(
+          "electron energy and species density must share the simulation mesh");
+    }
+    if (configuration.electron.value >= transport.species().size()) {
+      throw std::invalid_argument("electron energy species id is invalid");
+    }
+    const auto& properties = transport.species().at(configuration.electron);
+    if (properties.charge >= 0.0 || !properties.isTransported()) {
+      throw std::invalid_argument(
+          "electron energy species must be negative and drift-diffusion "
+          "transported");
+    }
+    if (!configuration.additional_source_evaluator) {
+      throw std::invalid_argument(
+          "electron energy additional source evaluator must not be empty");
+    }
+    if (!std::isfinite(configuration.density_floor) ||
+        configuration.density_floor < 0.0) {
+      throw std::invalid_argument(
+          "electron density floor must be finite and non-negative");
+    }
+    return equation::ExplicitElectronEnergyStepper(
+        transport.mesh(), transport.driftVelocityNormal(configuration.electron),
+        properties.diffusivity, configuration.boundary_conditions,
+        configuration.transport_factor);
+  }
+
+  /** @brief Validates one coherent runtime unit system and returns V-to-energy scaling. */
+  [[nodiscard]] static double validateMetadata(
+      const ElectronEnergyConfiguration& configuration,
+      const physics::SpeciesCellFields& density, const Stepper& transport) {
+    const auto& declared = transport.fieldMetadata();
+    const auto has_quantity = [](const field::FieldMetadata& metadata) {
+      return metadata.physical_quantity.has_value();
+    };
+    bool any_quantity = has_quantity(configuration.energy_density.metadata());
+    for (const auto& species_density : density) {
+      any_quantity = any_quantity || has_quantity(species_density.metadata());
+    }
+    any_quantity = any_quantity || has_quantity(declared.number_density) ||
+                   has_quantity(declared.number_density_source) ||
+                   has_quantity(declared.reaction_rate) ||
+                   has_quantity(declared.electric_potential) ||
+                   has_quantity(declared.electric_field) ||
+                   has_quantity(declared.drift_velocity) ||
+                   has_quantity(declared.inverse_time) ||
+                   has_quantity(declared.electron_mean_energy) ||
+                   has_quantity(declared.electron_energy_density) ||
+                   has_quantity(declared.electron_energy_density_source);
+
+    if (!any_quantity) {
+      if (!configuration.allow_unitless_raw_values) {
+        throw std::invalid_argument(
+            "electron energy requires physical metadata or an explicit "
+            "unitless raw-value opt-in");
+      }
+      return 1.0;
+    }
+
+    const auto require_kind = [](const field::FieldMetadata& metadata,
+                                 unit::QuantityKind kind,
+                                 std::string_view name) {
+      if (!metadata.physical_quantity.has_value() ||
+          metadata.physical_quantity->kind() != kind) {
+        throw std::invalid_argument(std::string{name} +
+                                    " metadata quantity kind differs");
+      }
+    };
+    const auto require_match = [](const field::FieldMetadata& actual,
+                                  const field::FieldMetadata& expected,
+                                  std::string_view name) {
+      if (!actual.physical_quantity.has_value() ||
+          !expected.physical_quantity.has_value() ||
+          actual.physical_quantity != expected.physical_quantity) {
+        throw std::invalid_argument(std::string{name} +
+                                    " metadata unit differs from transport");
+      }
+    };
+
+    require_kind(declared.number_density,
+                 unit::QuantityKind::particle_number_density, "number density");
+    require_kind(declared.number_density_source,
+                 unit::QuantityKind::particle_number_density_rate,
+                 "number density source");
+    require_kind(declared.reaction_rate,
+                 unit::QuantityKind::reaction_rate_density, "reaction rate");
+    require_kind(declared.electric_potential,
+                 unit::QuantityKind::electric_potential, "electric potential");
+    require_kind(declared.electric_field,
+                 unit::QuantityKind::normal_electric_field_strength,
+                 "electric field");
+    require_kind(declared.drift_velocity,
+                 unit::QuantityKind::normal_drift_velocity, "drift velocity");
+    require_kind(declared.inverse_time, unit::QuantityKind::frequency,
+                 "inverse time");
+    require_kind(declared.electron_mean_energy,
+                 unit::QuantityKind::electron_mean_energy,
+                 "electron mean energy");
+    require_kind(declared.electron_energy_density,
+                 unit::QuantityKind::electron_energy_density,
+                 "electron energy density");
+    require_kind(declared.electron_energy_density_source,
+                 unit::QuantityKind::electron_energy_density_rate,
+                 "electron energy source");
+
+    for (const auto& species_density : density) {
+      require_match(species_density.metadata(), declared.number_density,
+                    "species density");
+    }
+    require_match(configuration.energy_density.metadata(),
+                  declared.electron_energy_density, "electron energy density");
+
+    const auto number_density_unit =
+        declared.number_density.physical_quantity->unit();
+    const auto inverse_time_unit =
+        declared.inverse_time.physical_quantity->unit();
+    const auto potential_unit =
+        declared.electric_potential.physical_quantity->unit();
+    const auto electric_field_unit =
+        declared.electric_field.physical_quantity->unit();
+    const auto drift_velocity_unit =
+        declared.drift_velocity.physical_quantity->unit();
+    const auto mean_energy_unit =
+        declared.electron_mean_energy.physical_quantity->unit();
+    const auto energy_density_unit =
+        declared.electron_energy_density.physical_quantity->unit();
+
+    if (declared.number_density_source.physical_quantity->unit() !=
+            number_density_unit * inverse_time_unit ||
+        declared.reaction_rate.physical_quantity->unit() !=
+            number_density_unit * inverse_time_unit ||
+        energy_density_unit != number_density_unit * mean_energy_unit ||
+        declared.electron_energy_density_source.physical_quantity->unit() !=
+            energy_density_unit * inverse_time_unit) {
+      throw std::invalid_argument(
+          "plasma field metadata units are not algebraically coherent");
+    }
+
+    const auto mesh_length_unit = potential_unit / electric_field_unit;
+    if (!mesh_length_unit.is_convertible(units::precise::m) ||
+        drift_velocity_unit / mesh_length_unit != inverse_time_unit) {
+      throw std::invalid_argument(
+          "electric-field and transport metadata use inconsistent length/time "
+          "units");
+    }
+
+    const double potential_to_volt =
+        units::convert(1.0, potential_unit, units::precise::V);
+    const double electronvolt_to_storage =
+        units::convert(1.0, units::precise::energy::eV, mean_energy_unit);
+    const double factor = potential_to_volt * electronvolt_to_storage;
+    if (!std::isfinite(factor) || factor <= 0.0) {
+      throw std::invalid_argument(
+          "electron field-power unit conversion is invalid");
+    }
+    return factor;
+  }
+
+  /** @brief Creates workspaces and validates the initial energy state. */
+  ElectronEnergySubsystem(ElectronEnergyConfiguration configuration,
+                          const physics::SpeciesCellFields& density,
+                          Stepper& transport)
+      : energy_density(&configuration.energy_density),
+        electron(configuration.electron),
+        density_floor(configuration.density_floor),
+        stepper(makeStepper(configuration, density, transport)),
+        field_power_conversion_factor(
+            validateMetadata(configuration, density, transport)),
+        additional_source_evaluator(
+            std::move(configuration.additional_source_evaluator)),
+        mean_energy(transport.mesh(), 0.0,
+                    transport.fieldMetadata().electron_mean_energy),
+        particle_flux_normal(transport.mesh(), 0.0),
+        additional_source(
+            transport.mesh(), 0.0,
+            transport.fieldMetadata().electron_energy_density_source),
+        source(transport.mesh(), 0.0,
+               transport.fieldMetadata().electron_energy_density_source),
+        increment(transport.mesh(), 0.0,
+                  transport.fieldMetadata().electron_energy_density) {
+    refreshMeanEnergy(density);
+  }
+
+  /** @brief Recomputes mean energy from synchronized density and energy. */
+  void refreshMeanEnergy(const physics::SpeciesCellFields& density) {
+    physics::computeElectronMeanEnergy(*energy_density, density[electron],
+                                       density_floor, mean_energy);
+  }
+
+  /** @brief Assembles mandatory field power and additional energy sources. */
+  void evaluateSource(const physics::SpeciesCellFields& density,
+                      Stepper& transport,
+                      const field::CellField<double>& potential,
+                      const field::FaceField<double>& electric_field_normal,
+                      const physics::ReactionRateFields& reaction_rates,
+                      const physics::SpeciesCellFields& species_source) {
+    transport.computeParticleFluxNormal(density, electron,
+                                        particle_flux_normal);
+    physics::computeElectronFieldPowerDensity(particle_flux_normal,
+                                              electric_field_normal, source);
+    for (double& value : source) {
+      value *= field_power_conversion_factor;
+    }
+
+    additional_source.fill(std::numeric_limits<double>::quiet_NaN());
+    additional_source_evaluator(
+        {.density = density,
+         .potential = potential,
+         .electric_field_normal = electric_field_normal,
+         .electron_particle_flux_normal = particle_flux_normal,
+         .reaction_rates = reaction_rates,
+         .species_source = species_source,
+         .mean_energy = mean_energy},
+        additional_source);
+    for (const double value : additional_source) {
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument(
+            "electron energy additional source evaluator must write finite "
+            "values");
+      }
+    }
+    for (mesh::CellId cell = 0; cell < source.mesh().numCells(); ++cell) {
+      source[cell] += additional_source[cell];
+    }
+    for (const double value : source) {
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument(
+            "assembled electron energy source must be finite");
+      }
+    }
+  }
+
+  /** @brief Returns the current transport CFL limit of the energy equation. */
+  [[nodiscard]] double maxStableTransportTimeStep() {
+    return stepper.maxStableTransportTimeStep();
+  }
+
+  /** @brief Returns the current source-aware energy positivity limit. */
+  [[nodiscard]] double maxPositiveTimeStep() {
+    return stepper.maxPositiveTimeStep(*energy_density, source);
+  }
+
+  /** @brief Validates dt and prepares an energy increment without mutation. */
+  void prepareIncrement(double dt) {
+    stepper.computeStableIncrement(*energy_density, source, dt, increment);
+  }
+
+  /** @brief Commits the previously validated energy increment. */
+  void commitIncrement() {
+    for (mesh::CellId cell = 0; cell < energy_density->mesh().numCells();
+         ++cell) {
+      (*energy_density)[cell] += increment[cell];
+    }
+  }
+};
+
 template <typename Stepper, typename Clock>
 struct PlasmaWorkflowCore {
   physics::SpeciesCellFields* density;
@@ -105,6 +389,7 @@ struct PlasmaWorkflowCore {
   CheckpointOptions checkpoint_options;
   physics::ReactionRateFields reaction_rates;
   physics::SpeciesCellFields source;
+  ElectronEnergySubsystem<Stepper> electron_energy;
   std::unique_ptr<output::dump::ISeries> field_output_series;
   bool field_output_has_snapshots{};
   SimulationState state{SimulationState::ready};
@@ -114,6 +399,7 @@ struct PlasmaWorkflowCore {
   PlasmaWorkflowCore(physics::SpeciesCellFields& density_in,
                      const physics::ReactionNetwork& reactions,
                      Stepper& stepper, PlasmaReactionRateEvaluator evaluator,
+                     ElectronEnergyConfiguration energy_configuration,
                      Clock clock_in, trace::AnyTraceSink sink,
                      trace::StatisticsOptions statistics,
                      FieldOutputOptions field_output,
@@ -132,6 +418,7 @@ struct PlasmaWorkflowCore {
                        stepper.fieldMetadata().reaction_rate),
         source(density_in.mesh(), density_in.size(), 0.0,
                stepper.fieldMetadata().number_density_source),
+        electron_energy(std::move(energy_configuration), density_in, stepper),
         category(trace_category),
         workflow_kind(checkpoint_kind) {
     if (!rate_evaluator) {
@@ -147,7 +434,9 @@ struct PlasmaWorkflowCore {
     }
     validatePlasmaStatisticsConfiguration(
         statistics_options, *density, stepper.chargeDensity(),
-        stepper.potential(), stepper.electricFieldNormal());
+        stepper.potential(), stepper.electricFieldNormal(),
+        *electron_energy.energy_density, electron_energy.mean_energy,
+        electron_energy.source);
     validateFieldOutputOptions(field_output_options);
     validateCheckpointOptions(checkpoint_options);
   }
@@ -189,7 +478,8 @@ struct PlasmaWorkflowCore {
     if (shouldWritePlasmaFieldSnapshot(field_output_options, clock.step(),
                                        terminal)) {
       (void)writePlasmaFieldSnapshot(
-          *density, *transport_stepper, field_output_options,
+          *density, *transport_stepper, *electron_energy.energy_density,
+          electron_energy.mean_energy, field_output_options,
           *field_output_series,
           {.step = static_cast<std::uint64_t>(clock.step()),
            .time = clock.time()});
@@ -198,6 +488,32 @@ struct PlasmaWorkflowCore {
     if (terminal && field_output_has_snapshots) {
       finishOutput();
     }
+  }
+
+  /** @brief Evaluates the energy source from the synchronized workflow state. */
+  void evaluateElectronEnergySource() {
+    electron_energy.evaluateSource(
+        *density, *transport_stepper, transport_stepper->potential(),
+        transport_stepper->electricFieldNormal(), reaction_rates, source);
+    const std::array attributes{
+        trace::TraceAttribute{"step", static_cast<std::uint64_t>(clock.step())},
+        trace::TraceAttribute{"field_count", std::uint64_t{1}},
+    };
+    emitTrace(trace_sink, category, "electron_energy_source.completed",
+              trace::Severity::Trace, attributes);
+  }
+
+  /** @brief Commits prepared energy and synchronizes its derived mean field. */
+  void commitElectronEnergy(double dt) {
+    electron_energy.commitIncrement();
+    electron_energy.refreshMeanEnergy(*density);
+    const std::array attributes{
+        trace::TraceAttribute{"step",
+                              static_cast<std::uint64_t>(clock.step() + 1)},
+        trace::TraceAttribute{"dt", dt},
+    };
+    emitTrace(trace_sink, category, "electron_energy.completed",
+              trace::Severity::Trace, attributes);
   }
 
   [[nodiscard]] output::OutputRecord save(
@@ -209,8 +525,13 @@ struct PlasmaWorkflowCore {
       throw std::logic_error(
           "terminal simulation state cannot be checkpointed");
     }
-    const auto sources =
+    auto sources =
         plasmaCheckpointSources(*density, transport_stepper->species());
+    sources.push_back(
+        {.field = electron_energy.energy_density,
+         .key = electronEnergyDensityCheckpointKey(
+             electron_energy.electron,
+             transport_stepper->species().at(electron_energy.electron).name)});
     const double schema_version = plasma_checkpoint_schema_version;
     std::vector<output::checkpoint::ScalarSource> scalars{
         {.value = &schema_version,

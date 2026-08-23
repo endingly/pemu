@@ -80,9 +80,7 @@ struct CapturedSnapshot {
 
 /** @brief Converts runtime unit metadata to its stable serialized name. */
 std::string unitName(const unit::PhysicalQuantityMetadata& metadata) {
-  return metadata.unit() == units::precise::one
-             ? std::string{"1"}
-             : units::to_string(metadata.unit());
+  return pemu::to_string(metadata.unit());
 }
 
 /** @brief Reports whether a field name collides with pemu VTKHDF metadata. */

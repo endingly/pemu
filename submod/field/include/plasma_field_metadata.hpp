@@ -16,6 +16,9 @@ struct PlasmaFieldMetadata {
   FieldMetadata electric_field;
   FieldMetadata drift_velocity;
   FieldMetadata inverse_time;
+  FieldMetadata electron_mean_energy;
+  FieldMetadata electron_energy_density;
+  FieldMetadata electron_energy_density_source;
 };
 
 // Canonical metadata for meshes whose coordinate values are centimetres. The
@@ -51,6 +54,16 @@ struct PlasmaFieldMetadata {
           pemu::unit::plasma_quantity::normal_drift_velocity[cm / s]),
       .inverse_time =
           makeFieldMetadata("inverse time", isq::frequency[one / s]),
+      .electron_mean_energy = makeFieldMetadata(
+          "electron mean energy",
+          pemu::unit::plasma_quantity::electron_mean_energy[eV]),
+      .electron_energy_density = makeFieldMetadata(
+          "electron energy density",
+          pemu::unit::plasma_quantity::electron_energy_density[eV / cubic(cm)]),
+      .electron_energy_density_source = makeFieldMetadata(
+          "electron energy density source",
+          pemu::unit::plasma_quantity::electron_energy_density_rate
+              [eV / (cubic(cm) * s)]),
   };
 }
 
