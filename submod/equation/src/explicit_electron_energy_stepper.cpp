@@ -24,6 +24,7 @@ struct ExplicitElectronEnergyStepper::Impl {
   field::FaceField<double> energy_normal_drift_velocity;
   std::unique_ptr<AdaptiveStepExplicitSpeciesContinuityStepper> transport;
   field::CellField<double> transport_loss_rate;
+  field::CellField<double> prescribed_boundary_sink_rate;
   field::CellField<double> increment;
 
   /** @brief Validates closure parameters and returns factor * D_e. */
@@ -60,6 +61,7 @@ struct ExplicitElectronEnergyStepper::Impl {
         wall_flux(std::move(wall_flux_in)),
         energy_normal_drift_velocity(mesh_in, 0.0),
         transport_loss_rate(mesh_in, 0.0),
+        prescribed_boundary_sink_rate(mesh_in, 0.0),
         increment(mesh_in, 0.0) {
     if (&electron_velocity.mesh() != &mesh_in) {
       throw std::invalid_argument(
@@ -83,7 +85,7 @@ struct ExplicitElectronEnergyStepper::Impl {
     }
   }
 
-  /** @brief Requires finite non-negative Dirichlet energy on every boundary. */
+  /** @brief Requires a finite supported energy condition on every boundary. */
   void validateBoundaryConditions() const {
     for (mesh::FaceId face = 0; face < mesh->numFaces(); ++face) {
       if (!mesh->isBoundary(face)) {
@@ -98,13 +100,20 @@ struct ExplicitElectronEnergyStepper::Impl {
         throw std::invalid_argument(
             "electron energy boundary condition is missing");
       }
-      const auto* dirichlet = std::get_if<boundary::Dirichlet>(
-          &energy_boundary_conditions.at(boundary_id));
-      if (dirichlet == nullptr || !std::isfinite(dirichlet->value) ||
-          dirichlet->value < 0.0) {
+      const auto& condition = energy_boundary_conditions.at(boundary_id);
+      if (const auto* dirichlet =
+              std::get_if<boundary::Dirichlet>(&condition)) {
+        if (std::isfinite(dirichlet->value) && dirichlet->value >= 0.0) {
+          continue;
+        }
         throw std::invalid_argument(
-            "electron energy transport requires finite non-negative "
-            "Dirichlet boundaries");
+            "electron energy Dirichlet value must be finite and "
+            "non-negative");
+      }
+      const auto* neumann = std::get_if<boundary::Neumann>(&condition);
+      if (neumann == nullptr || !std::isfinite(neumann->value)) {
+        throw std::invalid_argument(
+            "electron energy Neumann flux must be finite");
       }
     }
   }
@@ -160,6 +169,7 @@ struct ExplicitElectronEnergyStepper::Impl {
   void updateTransportLossRate() {
     updateEnergyDriftVelocity();
     transport->computeTransportLossRate(transport_loss_rate);
+    transport->computePrescribedBoundarySinkRate(prescribed_boundary_sink_rate);
     for (const double loss_rate : transport_loss_rate) {
       if (!std::isfinite(loss_rate) || loss_rate < 0.0) {
         throw std::runtime_error(
@@ -193,7 +203,7 @@ struct ExplicitElectronEnergyStepper::Impl {
     for (mesh::CellId cell = 0; cell < mesh->numCells(); ++cell) {
       const double depletion =
           transport_loss_rate[cell] * energy_density[cell] +
-          std::max(-source[cell], 0.0);
+          std::max(-source[cell], 0.0) + prescribed_boundary_sink_rate[cell];
       if (depletion > 0.0) {
         limit = std::min(limit, energy_density[cell] / depletion);
       }

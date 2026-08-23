@@ -80,6 +80,9 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
         transport_loss_rate_(mesh, species.size(), 0.0,
                              field_metadata_.inverse_time),
 
+        prescribed_boundary_sink_rate_(mesh, species.size(), 0.0,
+                                       field_metadata_.number_density_source),
+
         increments_(mesh, species.size(), 0.0, field_metadata_.number_density),
 
         poisson_solver_(discretization::PoissonFvm(mesh, charge_density_,
@@ -213,6 +216,7 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
     requireElectrostaticsReady();
 
     transport_loss_rate_.fill(0.0);
+    prescribed_boundary_sink_rate_.fill(0.0);
 
     forEachSpecies([&](physics::SpeciesId id) {
       auto* stepper = transportStepper(id);
@@ -222,6 +226,8 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
       }
 
       stepper->computeTransportLossRate(transport_loss_rate_[id]);
+      stepper->computePrescribedBoundarySinkRate(
+          prescribed_boundary_sink_rate_[id]);
     });
   }
 
@@ -260,19 +266,20 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
   }
 
   // ========================================================
-  // Combined transport + reaction sink positivity limit:
+  // Combined transport, source and prescribed-boundary positivity limit:
   //
   //     dt <=
   //
   //           n
   //     ----------------
-  //     lambda*n + sink
+  //     lambda*n + source_sink + boundary_sink
   //
   // where:
   //
-  //     sink = max(-S, 0)
+  //     source_sink = max(-S, 0)
+  //     boundary_sink = sum max(q_neumann, 0) A / V
   //
-  // Positive source does not constrain positivity.
+  // Positive source and incoming Neumann flux do not constrain positivity.
   // ========================================================
 
   [[nodiscard]]
@@ -307,7 +314,8 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
 
         const double sink = std::max(-source[id][cell], 0.0);
 
-        const double depletion_rate = lambda * n + sink;
+        const double depletion_rate =
+            lambda * n + sink + prescribed_boundary_sink_rate_[id][cell];
 
         if (depletion_rate == 0.0) {
 
@@ -659,6 +667,8 @@ class ExplicitMultiSpeciesDriftDiffusionOperator {
   std::optional<physics::wall::WallFluxAssembler> wall_flux_assembler_;
 
   physics::SpeciesCellFields transport_loss_rate_;
+
+  physics::SpeciesCellFields prescribed_boundary_sink_rate_;
 
   physics::SpeciesCellFields increments_;
 

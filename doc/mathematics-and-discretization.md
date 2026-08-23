@@ -476,9 +476,9 @@ n_N=2.5\times10^{19}\,\mathrm{cm^{-3}},
 k_{\mathrm{ion}}=10^{-13}\,\mathrm{cm^3/s}.
 $$
 
-物种边界均取初始密度的 Dirichlet 条件；这是当前 Scharfetter--Gummel 实现仅支持
-Dirichlet 物种边界的明确限制。这里新增的纯 Neumann 支持仅作用于泊松电势方程，
-不代表物种 Neumann 通量已经可用。仿真运行到
+物种边界均取初始密度的 Dirichlet 条件，以保持原 400 V 回归算例的边界定义不变。
+Scharfetter--Gummel 物种输运现在也接受 Neumann：其值指定外向扩散通量，总通量还会
+保留边界漂移出流；因此齐次 Neumann 在零法向漂移时才等同于严格 zero-flux。仿真运行到
 
 $$
 t_{\mathrm{end}}=2\times10^{-7}\,\mathrm{s},

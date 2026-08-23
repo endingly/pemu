@@ -398,7 +398,7 @@ TEST_F(FixedStepElectrostaticDriftDiffusionStepperTest,
   auto potential_bc = makeLinearXPotentialBoundaryConditions();
 
   //
-  // SG currently requires Dirichlet species BC.
+  // Preserve this regression's original fixed-density species boundaries.
   //
   auto electron_bc = makeConstantSpeciesBoundaryConditions(1.0);
 

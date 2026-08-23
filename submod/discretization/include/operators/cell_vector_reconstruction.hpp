@@ -104,10 +104,15 @@ inline void reconstructCellVectorMagnitudeFromFaceNormal(
     for (const mesh::FaceId face : mesh.cellFaces(cell)) {
       const double area = mesh.faceArea(face);
       const auto normal = mesh.faceNormal(face);
-      if (!std::isfinite(area) || area <= 0.0 || !std::isfinite(normal.x) ||
+      if (!std::isfinite(area) || area < 0.0 || !std::isfinite(normal.x) ||
           !std::isfinite(normal.y) || !std::isfinite(normal.z)) {
         throw std::runtime_error(
             "cell-vector reconstruction requires finite face geometry");
+      }
+      // Axisymmetric meshes retain the r=0 topological face with zero
+      // revolved area. It carries no physical least-squares weight.
+      if (area == 0.0) {
+        continue;
       }
 
       for (int row = 0; row < dimension; ++row) {

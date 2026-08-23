@@ -26,6 +26,16 @@ namespace {
   return conditions;
 }
 
+/** @brief Creates one outward diffusive energy flux on every boundary. */
+[[nodiscard]] boundary::BoundaryConditionSet uniformNeumannBoundary(
+    double value = 0.0) {
+  boundary::BoundaryConditionSet conditions;
+  for (mesh::BoundaryId boundary = 1; boundary <= 4; ++boundary) {
+    conditions.setNeumann(boundary, value);
+  }
+  return conditions;
+}
+
 /** @brief Creates symmetric boundary data for cell energies one and three. */
 [[nodiscard]] boundary::BoundaryConditionSet symmetricGradientBoundary() {
   boundary::BoundaryConditionSet conditions;
@@ -137,6 +147,37 @@ TEST_F(ExplicitElectronEnergyStepperTest,
   for (const double cell_energy : energy_density) {
     EXPECT_NEAR(cell_energy, value, 1e-14);
   }
+}
+
+TEST_F(ExplicitElectronEnergyStepperTest,
+       HomogeneousNeumannPreservesConstantZeroDriftEnergy) {
+  constexpr double value = 4.0;
+  field::FaceField<double> electron_velocity(mesh_, 0.0);
+  field::CellField<double> energy_density(mesh_, value);
+  field::CellField<double> source(mesh_, 0.0);
+  ExplicitElectronEnergyStepper stepper(mesh_, electron_velocity, 0.1,
+                                        uniformNeumannBoundary());
+  const double dt = 0.5 * stepper.maxStableTransportTimeStep();
+
+  stepper.step(energy_density, source, dt);
+
+  for (const double cell_energy : energy_density) {
+    EXPECT_NEAR(cell_energy, value, 1e-14);
+  }
+}
+
+TEST_F(ExplicitElectronEnergyStepperTest,
+       PrescribedNeumannOutflowLimitsPositiveTimeStep) {
+  field::FaceField<double> electron_velocity(mesh_, 0.0);
+  field::CellField<double> energy_density(mesh_, 1.0);
+  field::CellField<double> source(mesh_, 0.0);
+  ExplicitElectronEnergyStepper stepper(mesh_, electron_velocity, 0.1,
+                                        uniformNeumannBoundary(0.5));
+
+  // Each unit cell has three boundary edges, so prescribed depletion is 1.5.
+  // The Maxwellian energy diffusivity contributes the conservative internal
+  // diagonal 1/6, giving dt_positive = 1 / (1.5 + 1/6) = 0.6.
+  EXPECT_NEAR(stepper.maxPositiveTimeStep(energy_density, source), 0.6, 1e-14);
 }
 
 TEST_F(ExplicitElectronEnergyStepperTest,

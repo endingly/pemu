@@ -1,6 +1,6 @@
 # 测试用例契约
 
-本页逐一说明仓库中所有 231 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
+本页逐一说明仓库中所有 296 个 GoogleTest 用例所守护的契约。数值阈值并非一般性
 精度承诺，而是当前测试网格、双精度实现和制造解下的回归界限。`two_quads.msh`
 包含两个相邻单位方形；大多数几何与算子测试以它为夹具。
 
@@ -54,6 +54,10 @@
 | `EachCellHasFourFaces` | 每个四边形连接四条面。 |
 | `ExposesOrderedCellVertexConnectivity` | `IMesh` 暴露构造非结构网格所需的有序 cell→vertex 稠密连通关系。 |
 | `ExposesDenseVertexCoordinates` | 每个稠密 `VertexId` 都能返回原始顶点坐标，且两单元夹具的包围盒正确。 |
+| `AxisymmetricMeshViewTest.PreservesMeridionalTopologyAndCoordinates` | 轴对称视图只改变物理度量，保持底层二维拓扑、边界元数据、中心与法向。 |
+| `AxisymmetricMeshViewTest.RevolvesPlanarCellsIntoAnnularVolumes` | 两个径向单位单元旋转后的总体积等于半径 2、长度 1 圆柱的 $4\pi$。 |
+| `AxisymmetricMeshViewTest.RevolvesFacesIntoPhysicalSurfaceAreas` | 轴线、内部、外壁和端面的旋转面积分别满足解析几何值。 |
+| `AxisymmetricMeshViewTest.RejectsOutOfRangeMeasureQueries` | 轴对称预计算度量保持 `IMesh` 的越界检查契约。 |
 | `CellFaceConnectivityIsConsistent` | 每条面同时出现在其 owner（及内面的 neighbor）邻接表中。 |
 | `CellsShareExactlyOneFace` | 两控制体只有一个公共内面。 |
 | `ComputesCorrectCellCenters` | 两个中心为 `(0.5,0.5)`、`(1.5,0.5)`，且不假设 ID 顺序。 |
@@ -122,6 +126,8 @@
 | `DivergenceConservesInternalFlux` | 单个内面通量在全域积分散度中精确相消。 |
 | `DivergenceUsesOwnerNeighborOrientation` | 正法向通量对 owner 为正、对 neighbor 为负。 |
 | `DivergenceSatisfiesDiscreteGaussTheorem` | 体积积分散度等于边界积分通量（此夹具为 6）。 |
+| `AxisymmetricDivergenceTest.RecoversRadialLinearFluxDivergence` | 轴对称度量下 $\boldsymbol\Gamma=r\mathbf e_r$ 的有限体积散度逐单元精确恢复为 2，并覆盖轴线零面积面。 |
+| `AxisymmetricDivergenceTest.ReconstructsVectorMagnitudeAcrossZeroAreaAxisFace` | 场强重构忽略轴线零面积面的零物理权重，并由其余独立法向精确恢复常向量模。 |
 | `DiffusionFluxIsExactForLinearField` | 线性场 `u=x` 的离散扩散通量精确为 `-D n_x`。 |
 | `DivergenceOfLinearDiffusionFluxIsZero` | 常梯度扩散场的离散散度为零。 |
 | `DivergenceRejectsDifferentMeshes` | 散度的输入/输出场不能跨网格混用。 |
@@ -143,6 +149,8 @@
 | `OperatorTest.ScharfetterGummelApproachesOwnerUpwindForStrongPositiveDrift` | 强正漂移极限取 owner 状态，趋近正向迎风通量。 |
 | `OperatorTest.ScharfetterGummelApproachesNeighborUpwindForStrongNegativeDrift` | 强负漂移极限取 neighbor 状态，趋近负向迎风通量。 |
 | `OperatorTest.ScharfetterGummelPreservesConstantStateFlux` | 常值状态与相容边界下仅保留物理对流通量 $v_nu$。 |
+| `OperatorTest.ScharfetterGummelNeumannAddsPrescribedDiffusiveFlux` | Neumann 值作为外向扩散通量与内部状态产生的漂移通量相加。 |
+| `OperatorTest.ScharfetterGummelHomogeneousNeumannKeepsDriftFlux` | 齐次 Neumann 不会错误消除边界上的物理漂移通量。 |
 | `OperatorTest.ConstantSgFluxHasZeroDivergence` | 常值状态的 Scharfetter–Gummel 通量不会产生虚假离散散度。 |
 | `OperatorTest.ScharfetterGummelExactlyPreservesExponentialEquilibrium` | 对满足相邻单元指数平衡关系的状态，离散漂移扩散通量精确为零。 |
 
@@ -271,7 +279,9 @@
 | `FixedStepExplicitSpeciesContinuityStepperTest.SourceChangesTotalParticlesByIntegratedSource` | 总粒子数变化等于 $\Delta t$ 乘体积积分源项。 |
 | `ExplicitElectronEnergyStepperTest.ConvertsBetweenEnergyDensityAndMeanEnergy` | $w_e=n_e\bar\varepsilon_e$ 双向转换正确，真空/低密度单元的平均能量按约定置零。 |
 | `ExplicitElectronEnergyStepperTest.MaxwellianClosureScalesCompleteTransportOperator` | 默认 $5/3$ Maxwellian closure 同时缩放能量漂移速度和扩散系数，保持面 Péclet 数并按比例缩放完整 SG 算子。 |
-| `ExplicitElectronEnergyStepperTest.RejectsInvalidEnergyBoundaryAtConstruction` | 能量输运构造时拒绝负值、非有限、缺失或非 Dirichlet 边界状态。 |
+| `ExplicitElectronEnergyStepperTest.RejectsInvalidEnergyBoundaryAtConstruction` | 能量输运构造时拒绝负 Dirichlet、非有限或缺失的边界条件。 |
+| `ExplicitElectronEnergyStepperTest.HomogeneousNeumannPreservesConstantZeroDriftEnergy` | 零漂移下齐次 Neumann 保持常电子能量密度及全域积分。 |
+| `ExplicitElectronEnergyStepperTest.PrescribedNeumannOutflowLimitsPositiveTimeStep` | 正向外流能量 Neumann 通量作为状态无关耗散进入电子能量 positivity 上限。 |
 | `ExplicitElectronEnergyStepperTest.ConstantEnergyDensityRemainsConstant` | 零漂移、相容边界和零源下，常电子能量密度保持不变。 |
 | `ExplicitElectronEnergyStepperTest.SourceChangesIntegratedEnergyByIntegratedSource` | 常值状态下总能量变化等于 $\Delta t$ 乘能量源的控制体积分。 |
 | `ExplicitElectronEnergyStepperTest.DiffusionRedistributesSymmetricEnergyConservatively` | 对称边界下能量由高值单元扩散到低值单元，同时保持全域积分。 |
@@ -288,11 +298,13 @@
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.RejectsFieldsFromDifferentMesh` | 多物种场不能跨网格传给推进器。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.MatchesLegacyTwoSpeciesSolver` | 更一般的固定多物种实现与固定双物种实现给出相同结果。 |
 | `FixedStepMultiSpeciesDriftDiffusionStepperTest.PureNeumannGaugeIsAvailableFromCoupledStepper` | 纯 Neumann 规范配置可由多物种漂移扩散推进器传入内部泊松求解器，并得到零电势、零电场的中性均匀解。 |
+| `FixedStepExplicitSpeciesContinuityStepperTest.NeumannOutflowContributesToFixedAndAdaptiveLossRates` | 普通 Neumann 边界保留漂移出流；固定、自适应估计分别计入对角损失与状态无关的规定通量 sink。 |
 | `AdaptiveTimeStepControllerTest.AppliesSafetyAndGrowthLimits` | 时间步提议同时服从安全系数、稳定性限制和相对上一时刻的增长上限。 |
 | `AdaptiveTimeStepControllerTest.TruncatesFinalStepToRemainingTime` | 时间步提议会被剩余时间截断，保证最终时刻精确对齐。 |
 | `AdaptiveTimeStepControllerTest.RejectsNoPositiveAdmissibleTimeStep` | 稳定性或正性限制为零时拒绝不存在正步长的推进。 |
 | `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.UsesConfiguredMaximumTimeStep` | 稳定性允许更大步长时，自适应推进器仍服从用户给定的 `max_dt`。 |
 | `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.FinalTimeStepEqualsRemainingTime` | 最后一步被截断为剩余时间，避免越过终止时刻。 |
+| `AdaptiveStepMultiSpeciesDriftDiffusionStepperTest.PrescribedNeumannOutflowLimitsSelectedTimeStep` | 多物种自适应 controller 将正向规定 Neumann 通量纳入 positivity limit，并用安全系数选出可提交步长。 |
 | `LinearBoundaryFluxTest.AggregatesSeveralWallFacesOnOneOwnerCell` | 同一控制体上的多个壁面损失按 $\sum_f v_fA_f/V$ 聚合。 |
 | `LinearBoundaryFluxTest.RejectsAggregateLossRateOverflow` | 单个壁面贡献均有限但控制体总损失率溢出时明确拒绝。 |
 | `LinearWallContinuityTest.WallFluxChangesIntegratedParticlesExactly` | 线性壁面通量引起的全域粒子变化严格等于边界面积积分。 |
@@ -347,3 +359,10 @@
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VDrivesOppositeDriftAndIonizationInCentimeterMesh` | 将 `poisson_64x64.msh` 的坐标解释为厘米，在左右端施加 $0/400\,\mathrm{V}$、上下绝缘电势边界；验证 mp-units 配置量向裸代数参数的换算、密度/电势/电场/反应率/源项/电子能量的运行期 metadata 传播，以及受物种与能量联合稳定性约束的多步推进、非负密度和电子相对离子向右漂移。电子能量源由同一 SG 粒子通量形成的电场功与 $15.76\,\mathrm{eV}$ 每次电离的附加损失共同组成，并逐单元验证有限且为正。测试启用 $1\,\mathrm{cm}$ 面外厚度统计，并验证普通 trace/diagnostic 只写入当前工作目录的 `test.diag.log`；`test.statistics.log` 按 step 输出 species、charge、potential、electric-field、电子能量密度、平均能量和非零能量源统计，能量复合单位稳定显示为 `eV/cm^3` 与 `eV/(cm^3*s)`。真实 `VtkHdfWriter` 将包括电子能量密度和平均能量在内的 step 0 至终态同步状态写入 `<build>/submod/simulation/output/parallel-plate-400v/parallel-plate-400v.vtkhdf`，测试再用官方 reader 校验时间步数与终态 step。 |
 | `PlasmaSimulation64x64CheckpointTest.ParallelPlate400VCheckpointRestoresAndContinuesSimulation` | 在关闭 dump/trace 的 $0/400\,\mathrm{V}$ 厘米网格固定步仿真中，由 simulation workflow 在第 3 步自动保存 checkpoint；新建 simulation 通过 `restoreCheckpoint()` 自动恢复物种密度、电子能量密度与 clock 后续跑至第 8 步，最终能量、density、电势、电荷和全部 face 电场/漂移速度与未中断运行逐项一致。 |
 | `AdaptiveStepPlasmaSimulation64x64Test.ParallelPlate400VPreservesLowerSolverDiagnosticAfterPhysicalStep` | 使用与上述 \(0/400\,\mathrm{V}\) 厘米网格、电离反应和初始物种完全相同的配置；先以真实 CHOLMOD 完成一个物理时间步，再注入一次底层求解失败，验证 `linalg` 域 diagnostic、可读的 `SolveFailed` 状态与根因消息先于 simulation 失败事件输出。结构化失败 trace 写入当前工作目录的 `test.failure.diag.log`。 |
+
+## Plasma benchmark（`submod/simulation/test/test_plasma_benchmarks.cpp`）
+
+| 用例 | 保证 |
+| --- | --- |
+| `PlasmaBenchmarkTest.HomogeneousIonizationEnergyHasFirstOrderTemporalConvergence` | 完整 workflow 对均匀成对电离和等平均能量电子源同时匹配显式 Euler 离散真值，并对连续解析解表现出一阶时间收敛。 |
+| `PlasmaBenchmarkTest.WallLossAndSecondaryEmissionHaveFirstOrderTemporalConvergence` | 粒子壁损失、二次电子和发射能量匹配三变量线性 ODE 的离散递推，并随时间步减半一阶收敛到连续解析解。 |

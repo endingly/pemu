@@ -82,5 +82,22 @@ PureNeumannOptions zero_mean{.gauge = ZeroMeanGauge{}};
 规范条件目前按单个连通计算域设计；若网格包含多个互不连通的区域，每个连通分量都
 需要独立规范条件，当前接口不会自动添加这些额外约束。
 
-上述支持只针对泊松电势边界。物种输运的 Scharfetter--Gummel 边界目前仍只支持
-Dirichlet；物种 Neumann 边界不在当前支持范围内。
+物种与电子能量的 Scharfetter--Gummel 边界同时支持 Dirichlet 和 Neumann。这里的
+Neumann `value` 表示外向扩散通量 $-D\nabla n\cdot\mathbf n$，总法向通量仍包含
+$v_nn_P$；因此齐次 Neumann 只有在 $v_n=0$ 时才是严格 zero-flux。M15 线性 wall law
+会覆盖同一物种、同一边界上的普通条件，不能与普通 Neumann 通量叠加。
+
+## 轴对称度量视图
+
+`AxisymmetricMeshView` 将普通二维网格解释为 $(r,z)$ 子午面，其中 `x=r\ge0`、`y=z`，
+绕 $r=0$ 旋转后供现有有限体积算子直接使用。它保留拓扑、坐标、单元/面中心和子午面
+单位法向，只在构造时预计算物理度量：
+
+$$
+V_P=2\pi r_P A_P,\qquad A_f^{\mathrm{axi}}=2\pi r_f L_f.
+$$
+
+这里使用 Pappus 质心定理；对于直边网格，公式也分别给出环形控制体体积与旋转面面积。
+轴线面 $r_f=0$ 的物理面积自然为零。该类是非拥有视图，被包装的二维 mesh 必须比视图
+活得更久，且构造后不能改变几何。它会拒绝非二维、非有限、负半径或非正底层度量，避免
+把普通 XY 网格静默当作轴对称网格。

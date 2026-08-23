@@ -27,7 +27,8 @@ class ExplicitElectronEnergyStepper {
    * @param electron_normal_drift_velocity Current electron particle drift
    * velocity on faces; subsequent field updates are observed by the stepper.
    * @param electron_diffusivity Electron particle diffusivity.
-   * @param energy_boundary_conditions Dirichlet values of energy density.
+   * @param energy_boundary_conditions Dirichlet energy density or prescribed
+   * outward diffusive Neumann flux on each ordinary boundary.
    * @param energy_transport_factor Ratio mu_energy/mu_e and D_energy/D_e.
    */
   ExplicitElectronEnergyStepper(

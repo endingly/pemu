@@ -54,7 +54,18 @@ M15 Plasma wall / electrode BC             ✅
 
 Phase IV — Validation
 ────────────────────────────────────
-M16 Plasma benchmark suite
+M16 Plasma benchmark suite                  🚧
+    M16.1 verification scope / reference audit ✅
+    M16.2 homogeneous ionization-energy temporal benchmark ✅
+    M16.3 wall-loss / secondary-emission temporal benchmark ✅
+    M16.4 published streamer benchmark prerequisites
+        M16.4.1 field-dependent transport coefficients
+            M16.4.1.1 generic tabulated scalar coefficient
+            M16.4.1.2 |E| cell reconstruction and face interpolation
+            M16.4.1.3 synchronized particle / electron-energy transport
+        M16.4.2 species zero-flux / Neumann boundary ✅
+        M16.4.3 axisymmetric mesh measures ✅
+    M16.5 published dataset comparison
 
 
 Phase V — Performance

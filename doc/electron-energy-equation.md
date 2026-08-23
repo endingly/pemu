@@ -74,7 +74,8 @@ $$
 由于 $v_w$ 与 $D_w$ 同乘 closure factor，面 Péclet 数保持与电子粒子输运一致，而整个
 能量通量乘以该 factor。
 
-普通边界接受有限、非负的能量密度 Dirichlet 值。M15 壁面可以改用线性法向通量
+普通边界接受有限、非负的能量密度 Dirichlet 值，或有限的外向扩散 Neumann 通量；
+齐次 Neumann 在零漂移时就是 zero-flux。M15 壁面可以改用线性法向通量
 $\Gamma_w\cdot n=v_{w,\mathrm{loss}}w-Q_{\mathrm{in}}$；能量损失速度独立于粒子损失速度，
 二次电子携带的能量由 wall assembler 根据入射粒子通量、产额和发射平均能量组装。
 
@@ -114,15 +115,18 @@ $$
 \Delta t_\mathrm{transport}=\min_{\lambda_P>0}\frac{1}{\lambda_P}.
 $$
 
-面向未来自适应推进，还提供不利用正源项和入流补偿的保守、状态相关非负上限
+面向未来自适应推进，还提供不利用正源项和入流补偿的保守、状态相关非负上限。记正向
+外流 Neumann 通量形成的单元耗散为
+$Q_{N,P}=\sum_f\max(q_{N,f},0)A_f/V_P$，则
 
 $$
 \Delta t_\mathrm{positive}=
 \min_P\frac{w_P}
-{\lambda_Pw_P+\max(-S_{w,P},0)}.
+{\lambda_Pw_P+\max(-S_{w,P},0)+Q_{N,P}}.
 $$
 
-当 $w_P=0$ 且该单元没有负源时，这个状态相关上限不约束输运，因此调用者必须始终将它
+当 $w_P=0$ 且该单元没有负源或正向 Neumann 耗散时，这个状态相关上限不约束输运，
+因此调用者必须始终将它
 与 $\Delta t_\mathrm{transport}$ 取最小值。
 
 `computeIncrement()` 只形成未经稳定性判断的增量；`computeStableIncrement()` 同时检查
@@ -133,7 +137,7 @@ $$
 
 固定步长与自适应步长 Simulation 都要求显式传入 `ElectronEnergyConfiguration`，不存在
 关闭电子能量方程的兼容路径。配置引用调用方持有的 $w_e$，并且必须指定电子 species、
-能量 Dirichlet 边界及附加源项 evaluator。构造阶段会拒绝空 evaluator、非负电荷
+能量 Dirichlet/Neumann 边界及附加源项 evaluator。构造阶段会拒绝空 evaluator、非负电荷
 或非漂移—扩散 species、不同 mesh、非法 density floor 及非法初始能量。
 
 一个时间步按以下顺序执行：

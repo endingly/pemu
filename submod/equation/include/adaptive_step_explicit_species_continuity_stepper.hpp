@@ -184,16 +184,24 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
         throw std::runtime_error("species boundary condition missing");
       }
 
-      // Current SG implementation supports
-      // Dirichlet boundaries only.
+      const auto& condition = bc_->at(boundary_id);
 
-      const auto* dirichlet =
-          std::get_if<boundary::Dirichlet>(&bc_->at(boundary_id));
+      // A Neumann value prescribes only the diffusive flux. Positive outward
+      // drift remains an owner-state loss; inward drift does not constrain
+      // positivity and therefore contributes no diagonal loss.
+      if (const auto* neumann = std::get_if<boundary::Neumann>(&condition)) {
+        if (!std::isfinite(neumann->value)) {
+          throw std::invalid_argument("species Neumann flux must be finite");
+        }
+        loss_rate[owner] += std::max(vn, 0.0) * mesh_->faceArea(face) /
+                            mesh_->cellVolume(owner);
+        continue;
+      }
+
+      const auto* dirichlet = std::get_if<boundary::Dirichlet>(&condition);
 
       if (dirichlet == nullptr) {
-        throw std::runtime_error(
-            "explicit SG transport currently "
-            "requires Dirichlet boundaries");
+        throw std::logic_error("unsupported explicit SG boundary type");
       }
 
       const auto delta = mesh_->faceCenter(face) - mesh_->cellCenter(owner);
@@ -225,6 +233,53 @@ class AdaptiveStepExplicitSpeciesContinuityStepper {
       for (mesh::CellId cell = 0; cell < mesh_->numCells(); ++cell) {
         loss_rate[cell] += wall_loss_rate_[cell];
       }
+    }
+  }
+
+  /**
+   * @brief Computes state-independent depletion from prescribed Neumann flux.
+   *
+   * Positive outward diffusive flux removes density at `q A / V`. Incoming
+   * flux and linear wall influx are not credited, so the resulting field is a
+   * conservative additive sink for positivity timestep selection.
+   */
+  void computePrescribedBoundarySinkRate(
+      field::CellField<double>& sink_rate) const {
+    if (&sink_rate.mesh() != mesh_) {
+      throw std::invalid_argument(
+          "boundary sink-rate field belongs to another mesh");
+    }
+
+    sink_rate.fill(0.0);
+    for (mesh::FaceId face = 0; face < mesh_->numFaces(); ++face) {
+      if (!mesh_->isBoundary(face) ||
+          (wall_flux_.has_value() && wall_flux_->active(face))) {
+        continue;
+      }
+
+      const auto boundary_id = mesh_->boundaryId(face);
+      if (boundary_id == mesh::invalid_boundary ||
+          !bc_->contains(boundary_id)) {
+        throw std::runtime_error("species boundary condition missing");
+      }
+
+      const auto* neumann =
+          std::get_if<boundary::Neumann>(&bc_->at(boundary_id));
+      if (neumann == nullptr) {
+        continue;
+      }
+      if (!std::isfinite(neumann->value)) {
+        throw std::invalid_argument("species Neumann flux must be finite");
+      }
+
+      const auto owner = mesh_->owner(face);
+      const double contribution = std::max(neumann->value, 0.0) *
+                                  mesh_->faceArea(face) /
+                                  mesh_->cellVolume(owner);
+      if (!std::isfinite(sink_rate[owner] + contribution)) {
+        throw std::overflow_error("species boundary sink rate overflowed");
+      }
+      sink_rate[owner] += contribution;
     }
   }
 

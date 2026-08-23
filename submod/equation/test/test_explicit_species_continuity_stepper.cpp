@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <filesystem>
+#include <pemu/equation/adaptive_step_explicit_species_continuity_stepper.hpp>
 #include <pemu/equation/fixed_step_explicit_species_continuity_stepper.hpp>
 #include <pemu/mesh/moab_mesh.hpp>
 
@@ -140,6 +141,56 @@ TEST_F(FixedStepExplicitSpeciesContinuityStepperTest,
   const double after = totalParticles(mesh_, density);
 
   EXPECT_NEAR(after - before, dt * integrated_source, 1e-12);
+}
+
+TEST_F(FixedStepExplicitSpeciesContinuityStepperTest,
+       NeumannOutflowContributesToFixedAndAdaptiveLossRates) {
+  constexpr double density_value = 1.0;
+  constexpr double outward_velocity = 2.0;
+  constexpr double prescribed_outward_flux = 0.5;
+  constexpr double diffusivity = 0.1;
+  constexpr double dt = 0.1;
+  field::CellField<double> density(mesh_, density_value);
+  field::CellField<double> source(mesh_, 0.0);
+  field::FaceField<double> velocity(mesh_, 0.0);
+  boundary::BoundaryConditionSet conditions;
+  for (mesh::BoundaryId boundary = 1; boundary <= 4; ++boundary) {
+    conditions.setNeumann(boundary, prescribed_outward_flux);
+  }
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+    if (mesh_.isBoundary(face)) {
+      velocity[face] = outward_velocity;
+    }
+  }
+  FixedStepExplicitSpeciesContinuityStepper fixed(mesh_, velocity, diffusivity,
+                                                  dt, conditions);
+  AdaptiveStepExplicitSpeciesContinuityStepper adaptive(
+      mesh_, velocity, diffusivity, conditions);
+  field::CellField<double> adaptive_loss_rate(mesh_, 0.0);
+  field::CellField<double> prescribed_sink_rate(mesh_, 0.0);
+
+  adaptive.computeTransportLossRate(adaptive_loss_rate);
+  adaptive.computePrescribedBoundarySinkRate(prescribed_sink_rate);
+  fixed.step(density, source);
+
+  for (mesh::CellId cell = 0; cell < mesh_.numCells(); ++cell) {
+    double boundary_area = 0.0;
+    for (const auto face : mesh_.cellFaces(cell)) {
+      if (mesh_.isBoundary(face)) {
+        boundary_area += mesh_.faceArea(face);
+      }
+    }
+    const double expected_loss_rate =
+        outward_velocity * boundary_area / mesh_.cellVolume(cell);
+    const double expected_prescribed_sink =
+        prescribed_outward_flux * boundary_area / mesh_.cellVolume(cell);
+    EXPECT_DOUBLE_EQ(adaptive_loss_rate[cell], expected_loss_rate + 0.1);
+    EXPECT_DOUBLE_EQ(prescribed_sink_rate[cell], expected_prescribed_sink);
+    EXPECT_DOUBLE_EQ(density[cell],
+                     density_value * (1.0 - dt * expected_loss_rate) -
+                         dt * expected_prescribed_sink);
+  }
+  EXPECT_DOUBLE_EQ(fixed.maxTransportCfl(), 0.61);
 }
 
 };  // namespace pemu::equation::test

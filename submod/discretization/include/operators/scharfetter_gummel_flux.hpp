@@ -9,6 +9,7 @@
 #include <pemu/mesh/geometry.hpp>
 #include <pemu/mesh/i_mesh.hpp>
 
+#include <cmath>
 #include <concepts>
 #include <stdexcept>
 #include <type_traits>
@@ -88,7 +89,7 @@ void scharfetterGummelFluxImpl(
     // ====================================================
     // Boundary face
     //
-    // Faces without a linear override use Dirichlet boundary states.
+    // Faces without a linear override use scalar boundary conditions.
     // ====================================================
 
     if (linear_boundary_flux != nullptr && linear_boundary_flux->active(face)) {
@@ -113,14 +114,29 @@ void scharfetterGummelFluxImpl(
 
     const auto& condition = bc.at(boundary_id);
 
+    if (const auto* neumann = std::get_if<boundary::Neumann>(&condition)) {
+      // Neumann prescribes the outward diffusive part -D grad(n).n.
+      // The owner-state drift contribution remains part of the total flux.
+      if (!std::isfinite(static_cast<double>(vn)) ||
+          !std::isfinite(static_cast<double>(state[owner])) ||
+          !std::isfinite(neumann->value)) {
+        throw std::invalid_argument(
+            "Scharfetter-Gummel Neumann flux requires finite inputs");
+      }
+      const double candidate =
+          static_cast<double>(vn) * static_cast<double>(state[owner]) +
+          neumann->value;
+      if (!std::isfinite(candidate)) {
+        throw std::overflow_error("Scharfetter-Gummel Neumann flux overflowed");
+      }
+      flux[face] = static_cast<Scalar>(candidate);
+      continue;
+    }
+
     const auto* dirichlet = std::get_if<boundary::Dirichlet>(&condition);
 
     if (dirichlet == nullptr) {
-
-      throw std::runtime_error(
-          "Scharfetter-Gummel currently "
-          "requires Dirichlet boundary "
-          "conditions");
+      throw std::logic_error("unsupported Scharfetter-Gummel boundary type");
     }
 
     // ----------------------------------------------------

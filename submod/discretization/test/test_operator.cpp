@@ -676,4 +676,48 @@ TEST_F(OperatorTest, ScharfetterGummelExactlyPreservesExponentialEquilibrium) {
   EXPECT_NEAR(flux[face], 0.0, 1e-12);
 }
 
+TEST_F(OperatorTest, ScharfetterGummelNeumannAddsPrescribedDiffusiveFlux) {
+  constexpr double state_value = 3.0;
+  constexpr double normal_velocity = 2.0;
+  constexpr double diffusive_flux = -0.5;
+  field::CellField<double> state(mesh_, state_value);
+  field::FaceField<double> velocity(mesh_, 0.0);
+  field::FaceField<double> flux(mesh_, 0.0);
+  const auto face = findBoundaryFace(mesh_, mesh::BoundaryId{1});
+  velocity[face] = normal_velocity;
+  boundary::BoundaryConditionSet conditions;
+  conditions.setNeumann(mesh::BoundaryId{1}, diffusive_flux);
+  conditions.setDirichlet(mesh::BoundaryId{2}, state_value);
+  conditions.setDirichlet(mesh::BoundaryId{3}, state_value);
+  conditions.setDirichlet(mesh::BoundaryId{4}, state_value);
+
+  discretization::operators::scharfetterGummelFlux(state, velocity, 0.2,
+                                                   conditions, flux);
+
+  EXPECT_DOUBLE_EQ(flux[face], normal_velocity * state_value + diffusive_flux);
+}
+
+TEST_F(OperatorTest, ScharfetterGummelHomogeneousNeumannKeepsDriftFlux) {
+  constexpr double state_value = 3.0;
+  field::CellField<double> state(mesh_, state_value);
+  field::FaceField<double> velocity(mesh_, 0.0);
+  field::FaceField<double> flux(mesh_, 0.0);
+  boundary::BoundaryConditionSet conditions;
+  for (mesh::BoundaryId boundary = 1; boundary <= 4; ++boundary) {
+    conditions.setNeumann(boundary, 0.0);
+  }
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+    velocity[face] = mesh_.faceNormal(face).x;
+  }
+
+  discretization::operators::scharfetterGummelFlux(state, velocity, 0.2,
+                                                   conditions, flux);
+
+  for (mesh::FaceId face = 0; face < mesh_.numFaces(); ++face) {
+    if (mesh_.isBoundary(face)) {
+      EXPECT_DOUBLE_EQ(flux[face], velocity[face] * state_value);
+    }
+  }
+}
+
 };  // namespace pemu::discretization::test

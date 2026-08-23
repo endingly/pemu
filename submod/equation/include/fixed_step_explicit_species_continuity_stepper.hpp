@@ -86,6 +86,23 @@ class FixedStepExplicitSpeciesContinuityStepper {
         continue;
       }
 
+      const auto boundary_id = mesh_->boundaryId(face);
+      if (boundary_id == mesh::invalid_boundary ||
+          !bc_->contains(boundary_id)) {
+        throw std::runtime_error("species boundary condition missing");
+      }
+      const auto& condition = bc_->at(boundary_id);
+      if (const auto* neumann = std::get_if<boundary::Neumann>(&condition)) {
+        if (!std::isfinite(neumann->value)) {
+          throw std::invalid_argument("species Neumann flux must be finite");
+        }
+        diagonal[owner] += std::max(vn, 0.0) * mesh_->faceArea(face);
+        continue;
+      }
+      if (!std::holds_alternative<boundary::Dirichlet>(condition)) {
+        throw std::logic_error("unsupported fixed SG boundary type");
+      }
+
       const double distance =
           mesh::dot(mesh_->faceCenter(face) - mesh_->cellCenter(owner), normal);
       if (distance <= 0.0) {

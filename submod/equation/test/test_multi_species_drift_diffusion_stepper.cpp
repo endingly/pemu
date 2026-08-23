@@ -1099,4 +1099,37 @@ TEST_F(AdaptiveStepMultiSpeciesDriftDiffusionStepperTest,
   EXPECT_NEAR(proposal.dt, 0.005, 1e-14);
 }
 
+TEST_F(AdaptiveStepMultiSpeciesDriftDiffusionStepperTest,
+       PrescribedNeumannOutflowLimitsSelectedTimeStep) {
+  physics::SpeciesSet species;
+  auto _ = addElectronAndIon(species, 0.0, 0.0, 0.1, 0.1);
+  physics::SpeciesCellFields density(mesh_, species.size(), 1.0);
+  physics::SpeciesCellFields source(mesh_, species.size(), 0.0);
+  std::vector<boundary::BoundaryConditionSet> species_bc(species.size());
+  for (auto& conditions : species_bc) {
+    for (mesh::BoundaryId boundary = 1; boundary <= 4; ++boundary) {
+      conditions.setNeumann(boundary, 0.5);
+    }
+  }
+
+  AdaptiveStepMultiSpeciesDriftDiffusionStepper stepper(
+      mesh_, species, 1.0, makeZeroPotentialBoundaryConditions(),
+      std::move(species_bc), std::make_unique<linalg::CholmodSolver>(),
+      {.safety = 0.5, .min_dt = 1e-8, .max_dt = 1.0, .max_growth = 2.0});
+
+  ASSERT_TRUE(stepper.prepareElectrostatics(density).success());
+  const auto proposal = stepper.proposeTimeStep(density, source, 1.0);
+
+  // Internal SG diffusion contributes lambda=0.1 and the three prescribed
+  // boundary faces contribute 1.5, so safety * dt_positive = 0.5 / 1.6.
+  EXPECT_NEAR(proposal.positivity_limit, 0.625, 1e-14);
+  EXPECT_NEAR(proposal.dt, 0.3125, 1e-14);
+  stepper.advancePrepared(density, source, proposal);
+  for (const auto& species_density : density) {
+    for (const double value : species_density) {
+      EXPECT_GE(value, 0.0);
+    }
+  }
+}
+
 }  // namespace pemu::equation::test

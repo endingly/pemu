@@ -1,6 +1,6 @@
 # pemu 
 
-`pemu` 是一个面向二维标量场问题的 C++23 数值计算原型。它以有限体积法
+`pemu` 是一个面向二维静电低温等离子体的 C++23 CPU 仿真内核。它以有限体积法
 （finite-volume method，FVM）为核心：在任意多边形控制体上守恒地离散通量，
 再将所得稀疏线性系统交给 SuiteSparse 求解。
 
@@ -10,6 +10,9 @@
 - 标量对流通量的一阶迎风离散；
 - 瞬态扩散方程的后向欧拉时间推进；
 - 电子能量密度的显式 Scharfetter–Gummel 输运、稳定性与非负性约束；
+- 多物种反应网络、E/N 或 Te 查表反应率和通用质量作用律；
+- 壁面粒子/能量损失与离子诱导二次电子发射；
+- 固定/自适应 Simulation workflow、结构化诊断、VTKHDF dump 与 checkpoint 恢复；
 - Gmsh 网格的 MOAB 读取、边界物理组及几何/拓扑预处理；
 - 基于官方 `vtkHDFWriter` 的独立 VTKHDF 场输出与 ParaView 可读性验证。
 
@@ -21,12 +24,15 @@
 4. [Output 持久化](doc/output.md)：VTKHDF dump、metadata、版本化 checkpoint 与恢复；
 5. [Simulation workflow](doc/simulation-workflow.md)：轻量状态机、运行控制与 checkpoint 调度；
 6. [电子能量方程](doc/electron-energy-equation.md)：M13 模型、SG 离散与显式稳定性；
-7. [测试用例契约](doc/testcases.md)：全部 243 个测试各自保证的性质。
+7. [壁面模型](doc/plasma-wall-boundary.md)：粒子、能量损失与二次发射；
+8. [Plasma benchmark](doc/plasma-benchmarks.md)：M16 解析验证与公开 benchmark 接入边界；
+9. [测试用例契约](doc/testcases.md)：全部测试各自保证的性质。
 
 ## 当前适用范围
 
-网格后端当前假定为平面 XY 二维网格；`cellVolume` 在二维中表示面积，
-`faceArea` 表示边长。扩散系数在现有 API 中为非负的空间常数。对内面的两点
+`MoabMesh` 后端读取平面 XY 二维网格；`cellVolume` 在二维中表示面积，`faceArea`
+表示边长。`AxisymmetricMeshView` 可将 `x=r\ge0` 的二维网格转换为绕轴控制体度量。
+扩散系数在现有 API 中仍为非负的空间常数。对内面的两点
 法使用控制体中心连线在面法向上的投影距离，因而最自然地适用于正交或接近正交
 的网格；非正交修正、各向异性扩散和三维几何尚未实现。
 
@@ -38,7 +44,7 @@
 
 项目使用 CMake 3.30、C++23、Ninja 与 vcpkg manifest 模式。依赖为 Eigen3、MOAB、
 SuiteSparse（CHOLMOD、UMFPACK）、GoogleTest 和 fmt；版本基线记录于
-[`vcpkg.json`](../vcpkg.json)。配置预设要求环境变量 `VCPKG_ROOT` 指向 vcpkg 根目录。
+[`vcpkg.json`](vcpkg.json)。配置预设要求环境变量 `VCPKG_ROOT` 指向 vcpkg 根目录。
 
 ```bash
 cmake --preset ci-linux-gcc-debug
